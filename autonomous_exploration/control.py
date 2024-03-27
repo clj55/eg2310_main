@@ -20,6 +20,7 @@ robot_r = params["robot_r"]
 
 pathGlobal = 0
 
+
 def euler_from_quaternion(x,y,z,w):
     t0 = +2.0 * (w * x + y * z)
     t1 = +1.0 - 2.0 * (x * x + y * y)
@@ -33,9 +34,11 @@ def euler_from_quaternion(x,y,z,w):
     yaw_z = math.atan2(t3, t4)
     return yaw_z
 
+# distance calculator
 def heuristic(a, b):
     return np.sqrt((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2)
 
+# astar algorithm
 def astar(array, start, goal):
     neighbors = [(0,1),(0,-1),(1,0),(-1,0),(1,1),(1,-1),(-1,1),(-1,-1)]
     close_set = set()
@@ -120,6 +123,7 @@ def bspline_planning(array, sn):
         path = array
     return path
 
+# pure_pursuit function turns the robot to the closest point (in our case, the nearest unexplored region)
 def pure_pursuit(current_x, current_y, current_heading, path, index):
     global lookahead_distance
     closest_point = None
@@ -132,23 +136,29 @@ def pure_pursuit(current_x, current_y, current_heading, path, index):
             closest_point = (x, y)
             index = i
             break
-    if closest_point is not None:
+    # if there is a closest_target, turns to the target
+    if closest_point is not None: 
         target_heading = math.atan2(closest_point[1] - current_y, closest_point[0] - current_x)
         desired_steering_angle = target_heading - current_heading
-    else:
+    # chooses the next closest_target inside the path list
+    else: 
         target_heading = math.atan2(path[-1][1] - current_y, path[-1][0] - current_x)
         desired_steering_angle = target_heading - current_heading
         index = len(path)-1
-    if desired_steering_angle > math.pi:
+    #ensures the robot doesn't turn 180 degrees 
+    if desired_steering_angle > math.pi: 
         desired_steering_angle -= 2 * math.pi
     elif desired_steering_angle < -math.pi:
         desired_steering_angle += 2 * math.pi
+    # smart turning
     if desired_steering_angle > math.pi/6 or desired_steering_angle < -math.pi/6:
         sign = 1 if desired_steering_angle > 0 else -1
         desired_steering_angle = sign * math.pi/4
         v = 0.0
     return v,desired_steering_angle,index
 
+# frontier algorithm
+# chooses the nearest unexplored region (a "frontier region")
 def frontierB(matrix):
     for i in range(len(matrix)):
         for j in range(len(matrix[i])):
@@ -172,6 +182,7 @@ def assign_groups(matrix):
                 group = dfs(matrix, i, j, group, groups)
     return matrix, groups
 
+# dfs = depth first search algorithm
 def dfs(matrix, i, j, group, groups):
     if i < 0 or i >= len(matrix) or j < 0 or j >= len(matrix[0]):
         return group
