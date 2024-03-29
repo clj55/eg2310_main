@@ -1,7 +1,7 @@
 import requests
 import json
 
-esp32_ip = '172.20.10.5' # this ip changes everytime you use it, but the ip wont change depending on the computer
+esp32_ip = '172.20.10.5' # this ip changes when you switch locations??, but the ip wont change depending on the computer
 turtleBot_ID = '43' # turtlebot3 burger ID we receive on the first day
 
 endpoint = "http://" + esp32_ip + "/openDoor" # url to connect to the server of esp32, which then goes into the directory "openDoor"
