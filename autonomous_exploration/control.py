@@ -1,6 +1,7 @@
 import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import OccupancyGrid , Odometry
+from rclpy.qos import qos_profile_sensor_data
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import LaserScan
 import numpy as np
@@ -152,7 +153,7 @@ def pure_pursuit(current_x, current_y, current_heading, path, index):
 def frontierB(matrix):
     for i in range(len(matrix)):
         for j in range(len(matrix[i])):
-            if matrix[i][j] == 0.0:
+            if matrix[i][j] == 0.0: #open space 
                 if i > 0 and matrix[i-1][j] < 0:
                     matrix[i][j] = 2
                 elif i < len(matrix)-1 and matrix[i+1][j] < 0:
@@ -275,7 +276,7 @@ def pathLength(path):
     total_distance = np.sum(distances)
     return total_distance
 
-def costmap(data,width,height,resolution):
+def costmap(data,width,height,resolution): #convert data from 1D array to 2D array 
     data = np.array(data).reshape(height,width)
     wall = np.where(data == 100)
     for i in range(-expansion_size,expansion_size+1):
@@ -291,7 +292,7 @@ def costmap(data,width,height,resolution):
     return data
 
 def exploration(data,width,height,resolution,column,row,originX,originY):
-        global pathGlobal #Global counter?
+        global pathGlobal #dont know why its redeclared here
         data = costmap(data,width,height,resolution) #Expand the barriers
         data[row][column] = 0 #Robot Current Location
         data[data > 5] = 1 # Those with a score of 0 are a go-to place, those with a score of 100 are a definite obstacle.
@@ -303,6 +304,7 @@ def exploration(data,width,height,resolution,column,row,originX,originY):
         else: #If there is a group, find the closest group
             data[data < 0] = 1 #--0.05 ones are unknown location. Mark it as ungoable. 0 = can go, 1 = can't go.
             path = findClosestGroup(data,groups,(row,column),resolution,originX,originY) #Find the closest group
+            print("PATH:", path)
             if path != None: #If there is a path, fix it with BSpline
                 path = bspline_planning(path,len(path)*5)
             else:
@@ -313,13 +315,13 @@ def exploration(data,width,height,resolution,column,row,originX,originY):
 def localControl(scan):
     v = None
     w = None
-    for i in range(60):
+    for i in range(37): #60 degrees 
         if scan[i] < robot_r:
             v = 0.2
             w = -math.pi/4 
             break
     if v == None:
-        for i in range(300,360):
+        for i in range(188,225): #300 - 360 degrees 
             if scan[i] < robot_r:
                 v = 0.2
                 w = math.pi/4
@@ -332,32 +334,34 @@ class navigationControl(Node):
         super().__init__('Exploration')
         self.subscription = self.create_subscription(OccupancyGrid,'map',self.map_callback,10)
         self.subscription = self.create_subscription(Odometry,'odom',self.odom_callback,10)
-        self.subscription = self.create_subscription(LaserScan,'scan',self.scan_callback,10)
+        self.subscription = self.create_subscription(LaserScan,'scan',self.scan_callback,qos_profile_sensor_data)
         self.publisher = self.create_publisher(Twist, 'cmd_vel', 10)
-        print("[BILGI] KESİF MODU AKTİF Cutting mode active")
-        self.kesif = True
+        print("[BILGI] KESİF MODU AKTİF Discovery mode active")
+        self.discover = True
         threading.Thread(target=self.exp).start() #It runs the discovery function as a thread.
         
     def exp(self):
+        print("change")
         twist = Twist()
         while True: #Wait until sensor data arrives.
             if not hasattr(self,'map_data') or not hasattr(self,'odom_data') or not hasattr(self,'scan_data'):
                 time.sleep(0.1)
                 continue
-            if self.kesif == True:
-                if isinstance(pathGlobal, int) and pathGlobal == 0:
+            if self.discover == True:
+                if isinstance(pathGlobal, int) and pathGlobal == 0: #isinstance() checks if pathGlobal is an int 
                     column = int((self.x - self.originX)/self.resolution)
-                    row = int((self.y- self.originY)/self.resolution)
+                    row = int((self.y - self.originY)/self.resolution)
+                    print("exploring")
                     exploration(self.data,self.width,self.height,self.resolution,column,row,self.originX,self.originY)
-                    self.path = pathGlobal
-                else:
-                    self.path = pathGlobal
+
+                self.path = pathGlobal
+
                 if isinstance(self.path, int) and self.path == -1:
-                    print("[BILGI] KESİF TAMAMLANDI CUTTING IS COMPLETED")
+                    print("[BILGI] KESİF TAMAMLANDI Discovery COMPLETED")
                     sys.exit()
                 self.c = int((self.path[-1][0] - self.originX)/self.resolution) 
                 self.r = int((self.path[-1][1] - self.originY)/self.resolution) 
-                self.kesif = False
+                self.discover = False
                 self.i = 0
                 print("[BILGI] YENI HEDEF BELİRLENDI A NEW TARGET HAS BEEN DETERMINED")
                 t = pathLength(self.path)/speed
@@ -373,7 +377,7 @@ class navigationControl(Node):
                 if(abs(self.x - self.path[-1][0]) < target_error and abs(self.y - self.path[-1][1]) < target_error):
                     v = 0.0
                     w = 0.0
-                    self.kesif = True
+                    self.discover = True
                     print("[BILGI] HEDEFE ULASILDI GOAL ACHIEVED")
                     self.t.join() #Wait until the thread finishes.
                 twist.linear.x = v
@@ -388,10 +392,12 @@ class navigationControl(Node):
     def scan_callback(self,msg):
         self.scan_data = msg
         self.scan = msg.ranges
+        laserranges = np.array(msg.ranges)
+        np.savetxt('scan.txt', laserranges)
 
     def map_callback(self,msg):
         self.map_data = msg
-        self.resolution = self.map_data.info.resolution
+        self.resolution = self.map_data.info.resolution # meter per cell 
         self.originX = self.map_data.info.origin.position.x
         self.originY = self.map_data.info.origin.position.y
         self.width = self.map_data.info.width
@@ -404,7 +410,6 @@ class navigationControl(Node):
         self.y = msg.pose.pose.position.y
         self.yaw = euler_from_quaternion(msg.pose.pose.orientation.x,msg.pose.pose.orientation.y,
         msg.pose.pose.orientation.z,msg.pose.pose.orientation.w)
-
 
 def main(args=None):
     rclpy.init(args=args)
