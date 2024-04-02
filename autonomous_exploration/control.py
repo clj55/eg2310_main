@@ -264,6 +264,7 @@ def findClosestGroup(matrix,groups, current,resolution,originX,originY):
         target = groups[index][1]
         target = target[random.randint(0,len(target)-1)]
         path = astar(matrix, current, target)
+        print(path)
         targetP = [(p[1]*resolution+originX,p[0]*resolution+originY) for p in path]
     return targetP
 

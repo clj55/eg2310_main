@@ -2,8 +2,12 @@ import numpy as np
 import math
 expansion_size = 1
 
-def costmap(data,width,height,resolution): #convert data from 1D array to 2D array 
+def costmap(data,width,height): #convert data from 1D array to 2D array 
     data = np.array(data).reshape(height,width)
+    np.savetxt('data.csv', data)
+    condition = np.logical_and(data > -1, data < 50)
+    data = np.where(condition, 0, data) #make everything < 5e+01 but not -1 open space
+    data = np.where(data > 50, 100, data) #make everything > 5e+01 but not -1 obstacle
     wall = np.where(data == 100)
     for i in range(-expansion_size,expansion_size+1):
         for j in range(-expansion_size,expansion_size+1):
@@ -14,6 +18,7 @@ def costmap(data,width,height,resolution): #convert data from 1D array to 2D arr
             x = np.clip(x,0,height-1) #make sure cells changing is within the map
             y = np.clip(y,0,width-1)
             data[x,y] = 100
+    
     return data
 
 def find_frontier_cells(matrix):
@@ -85,14 +90,14 @@ def calculate_centroid(group):
     centroid = (int(mean_x), int(mean_y))
     return centroid 
 
-def findClosesttoGoal(groups, target):
+def findClosesttoGoal(groups, target_x, target_y):
     centroids = []
     dists = []
     for group in groups:
         centroids.append(calculate_centroid(group))
     for centroid in centroids:
-        dists.append(math.dist(centroid, target))
+        dists.append(math.dist(centroid, (target_x, target_y)))
     min_index = dists.index(min(dists))
-    return centroids[min_index]
+    return centroids[min_index][0], centroids[min_index][1]
 
 

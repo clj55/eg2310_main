@@ -1,35 +1,40 @@
 import math
-speed = 0.07
 
-def pure_pursuit(current_x, current_y, current_heading, path, index):
-    global lookahead_distance
-    closest_point = None
-    v = speed
-    for i in range(index,len(path)):
-        x = path[i][0]
-        y = path[i][1]
-        distance = math.hypot(current_x - x, current_y - y)
-        if lookahead_distance < distance:
-            closest_point = (x, y)
-            index = i
-            break
-    if closest_point is not None:
-        target_heading = math.atan2(closest_point[1] - current_y, closest_point[0] - current_x)
-        desired_steering_angle = target_heading - current_heading
-    else:
-        target_heading = math.atan2(path[-1][1] - current_y, path[-1][0] - current_x)
-        desired_steering_angle = target_heading - current_heading
-        index = len(path)-1
+target_error = 0.1
+
+
+
+
+# tell robot to keep moving to next cell
+# reach next cell then move on to next cell
+# v and w can js keep changing ig
+    
+#generate v and w based on next cell 
+# target heading relative to horizontal 
+# target heading = atan(nextcell[1]- currcell[1], nextcell[0] - currcell[0])
+# target heading - current heading = desired steering angle in radian 
+# then do the turn shorter angle stuff 
+# turn till abs(desired_steering angle) < math.pi/6 then dont turn 
+def target_reached(curr_x, curr_y, target, target_error):
+    return (abs(curr_x - target[0]) < target_error and abs(curr_y - target[1]) < target_error)
+
+
+def vroom(target_x, target_y, curr_x, curr_y, curr_heading,v_speed, w_speed):
+    target_heading =  math.atan2(target_y - curr_y, target_x - curr_x)
+    desired_steering_angle = target_heading - curr_heading
     if desired_steering_angle > math.pi:
         desired_steering_angle -= 2 * math.pi
     elif desired_steering_angle < -math.pi:
         desired_steering_angle += 2 * math.pi
-    if desired_steering_angle > math.pi/6 or desired_steering_angle < -math.pi/6:
-        sign = 1 if desired_steering_angle > 0 else -1
-        desired_steering_angle = sign * math.pi/4
+    
+    v = v_speed
+    w = desired_steering_angle
+    if abs(desired_steering_angle) > math.pi/2:
         v = 0.0
-    return v,desired_steering_angle,index
-
-def follow_path(curr_x, curr_y, curr_heading, path, index):
-    closest_point  = path[i]
-    desired_steering_angle 
+    elif desired_steering_angle > math.pi/4:
+        w = w_speed
+    elif desired_steering_angle < -math.pi/4:
+        w = w_speed * -1
+    elif desired_steering_angle < 0:
+        w *= -1 
+    return v, w

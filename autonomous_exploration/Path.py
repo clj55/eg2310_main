@@ -1,9 +1,10 @@
 
 import numpy as np
 import heapq
+import math
 
 def heuristic(a, b):
-    return np.sqrt((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2)
+    return math.dist(a, b)
 
 def astar(array, start, goal):
     neighbors = [(0,1),(0,-1),(1,0),(-1,0),(1,1),(1,-1),(-1,1),(-1,-1)]
@@ -29,7 +30,7 @@ def astar(array, start, goal):
             tentative_g_score = gscore[current] + heuristic(current, neighbor)
             if 0 <= neighbor[0] < array.shape[0]:
                 if 0 <= neighbor[1] < array.shape[1]:                
-                    if array[neighbor[0]][neighbor[1]] == 1:
+                    if array[neighbor[0]][neighbor[1]] == 100:
                         continue
                 else:
                     # array bound y walls
@@ -46,6 +47,7 @@ def astar(array, start, goal):
                 heapq.heappush(oheap, (fscore[neighbor], neighbor))
     # If no path to goal was found, return closest path to goal
     if goal not in came_from:
+        print("no path to goal")
         closest_node = None
         closest_dist = float('inf')
         for node in close_set:
@@ -62,3 +64,7 @@ def astar(array, start, goal):
             data = data[::-1]
             return data
     return False
+
+
+array = np.loadtxt('/home/clj55/eg2310_ws/cmap.csv', delimiter=',')
+print(astar(array, (-15,37),  (94,46)))
