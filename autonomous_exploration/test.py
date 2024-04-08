@@ -12,16 +12,20 @@ import sys , threading , time
 from .Frontier import *
 from .Path import *
 from .Move import *
+from PIL import Image
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+import matplotlib
 
-goal_x = -0.1
-goal_y = -1.2 #in m use publish point to get coordinates
+goal_x = 3.37
+goal_y = 2.05 #in m use publish point to get coordinates
 goal_error = 0.15
 front_angle = 20
 front_angles = range(-front_angle,front_angle+1,1)
 stop_distance = 0.3
-sign = -1
+sign = 1
 v_speed = 0.07 * sign
-w_speed = 0.15
+w_speed = 0.03
 
 
 def euler_from_quaternion(x,y,z,w):
@@ -30,6 +34,17 @@ def euler_from_quaternion(x,y,z,w):
     yaw_z = math.atan2(t3, t4)
     return yaw_z
 
+def plot_img(img):
+    # Define colors for each value
+    colors = {-1: 'black', 0: 'white', 2: 'green', 100: 'blue'}
+
+    # Create a colormap from the specified colors
+    cmap = mcolors.ListedColormap([colors[val] for val in sorted(colors.keys())])
+
+    # Plot the matrix with specified colormap
+    plt.imshow(img, cmap=cmap, origin='lower')
+    plt.colorbar()  # Add a colorbar to show the mapping of values to colors
+    plt.show()
 
 class navigationControl(Node):
     def __init__(self):
@@ -40,6 +55,10 @@ class navigationControl(Node):
         self.tf_subscription = self.create_subscription(TFMessage, 'tf', self.tf_callback, qos_profile_sensor_data)
         self.twist_publisher = self.create_publisher(Twist, 'cmd_vel', 10)
         threading.Thread(target=self.exp).start() #It runs the discovery function as a thread.
+        twist = Twist()
+        twist.linear.x = 0.0
+        twist.angular.z = 0.0
+        self.twist_publisher.publish(twist)
     
     def scan_callback(self,msg):
         self.scan_data = msg
@@ -55,6 +74,11 @@ class navigationControl(Node):
         self.width = self.map_data.info.width
         self.height = self.map_data.info.height
         self.data = self.map_data.data
+        self.cmap= costmap(self.data, self.width, self.height)
+        np.savetxt('cmap.csv', self.cmap, delimiter=',')
+        self.frontier_map =  find_frontier_cells(self.cmap)
+        np.savetxt('fmap.csv', self.frontier_map, delimiter=',')
+        plot_img(self.frontier_map)
 
     def odom_callback(self,msg):
         self.odom_data = msg
@@ -73,68 +97,71 @@ class navigationControl(Node):
         twist = Twist()
         # GET COSTMAP
         # expand boundaries based on map 
-        while True:
-            if not hasattr(self,'map_data') or not hasattr(self,'odom_data') or not hasattr(self,'scan_data'):
-                print("has data:", hasattr(self,'map_data'), hasattr(self,'odom_data'), hasattr(self,'scan_data') )
-                time.sleep(0.1)
-                continue
-            self.x = self.odom_frame_x + self.odom_x #might have problems with the delay but fk it lah
-            self.y = self.odom_frame_y + self.odom_y
-            cmap= costmap(self.data, self.width, self.height)
-            np.savetxt('cmap.csv', cmap, delimiter=',')
-            # occ_grid = OccupancyGrid might publish cmap in the future 
-            # self.cmap_publisher.publish()
-
-            frontier_map = find_frontier_cells(cmap)
-            np.savetxt('fmap.csv', frontier_map, delimiter=',')
-            
-             # group cells are close together 
-            frontiers = assign_groups(frontier_map)
-            # print(frontiers)
-            frontiers = [grp for grp in frontiers.values() if len(grp) > 2] #make list of frontiers with > 2 frontier cells 
-            if len(frontiers) == 0:
-                print("Discovery Complete")
-                return
-
-            goal_x_cell = int((goal_x - self.originX)/self.resolution)
-            goal_y_cell = len(cmap) - int((goal_y - self.originY)/self.resolution)
-            chosen_x, chosen_y = findClosesttoGoal(frontiers, goal_x_cell, goal_y_cell) 
-            print(chosen_x, chosen_y)
-            chosen_x = chosen_x* self.resolution + self.originX
-            chosen_y = (len(cmap)  - chosen_y) * self.resolution + self.originY
-
-            while target_reached(self.x, self.y, (goal_x, goal_y), goal_error) == False:
-                v, w = vroom(chosen_x, chosen_y, self.x, self.y, self.yaw, v_speed, w_speed)
-                if self.laser_range.size != 0:
-                    lri = (self.laser_range[front_angles]<float(stop_distance)).nonzero()
-                    self.get_logger().info('Distances: %s' % str(lri))
-                    lri = np.array(lri)
-                    print(lri)
-
-                    # check distances in front of TurtleBot and find values less
-                    # than stop_distance
-                    if(len(lri[0])>0):
-                        self.stopbot()
-                        left_count = np.sum(lri<front_angle)
-                        right_count = np.sum(lri>front_angle)
-                        if left_count > right_count:
-                            w = w_speed
-                        else:
-                            w = w_speed *-1
-                        v = 0.0
-                    
-                twist.linear.x = v
-                twist.angular.z = w
-                self.get_logger().info('V: %s' % str(v))
-                self.get_logger().info('W: %s' % str(w))
-                self.twist_publisher.publish(twist)
-                time.sleep(0.1)
+        try:
+            while True:
+                if not hasattr(self,'map_data') or not hasattr(self,'odom_data') or not hasattr(self,'scan_data'):
+                    print("has data:", hasattr(self,'map_data'), hasattr(self,'odom_data'), hasattr(self,'scan_data') )
+                    time.sleep(0.1)
+                    continue
                 self.x = self.odom_frame_x + self.odom_x #might have problems with the delay but fk it lah
                 self.y = self.odom_frame_y + self.odom_y
+                
+                # occ_grid = OccupancyGrid might publish cmap in the future 
+                # self.cmap_publisher.publish()
 
-            #stop bot 
-            v, w = 0.0, 0.0
-            self.twist_publisher.publish(v,w)
+                
+                # group cells are close together 
+                frontiers = assign_groups(self.frontier_map)
+                # print(frontiers)
+                frontiers = [grp for grp in frontiers.values() if len(grp) > 2] #make list of frontiers with > 2 frontier cells 
+                if len(frontiers) == 0:
+                    print("Discovery Complete")
+                    return
+
+                goal_x_cell = int((goal_x - self.originX)/self.resolution)
+                goal_y_cell = len(self.cmap) - int((goal_y - self.originY)/self.resolution)
+                chosen_x, chosen_y = findClosesttoGoal(frontiers, goal_x_cell, goal_y_cell) 
+                print(chosen_x, chosen_y)
+                chosen_x = chosen_x* self.resolution + self.originX
+                chosen_y = (len(self.cmap)  - chosen_y) * self.resolution + self.originY
+
+                while target_reached(self.x, self.y, (goal_x, goal_y), goal_error) == False:
+                    v, w = vroom(chosen_x, chosen_y, self.x, self.y, self.yaw, v_speed, w_speed)
+                    if self.laser_range.size != 0:
+                        lri = (self.laser_range[front_angles]<float(stop_distance)).nonzero()
+                        self.get_logger().info('Distances: %s' % str(lri))
+                        lri = np.array(lri)
+                        print(lri)
+
+                        # check distances in front of TurtleBot and find values less
+                        # than stop_distance
+                        if(len(lri[0])>0):
+                            self.stopbot()
+                            left_count = np.sum(lri<front_angle)
+                            right_count = np.sum(lri>front_angle)
+                            if left_count > right_count:
+                                w = w_speed
+                            else:
+                                w = w_speed *-1
+                            v = 0.0
+                        
+                    twist.linear.x = v
+                    twist.angular.z = w
+                    self.get_logger().info('V: %s' % str(v))
+                    self.get_logger().info('W: %s' % str(w))
+                    self.twist_publisher.publish(twist)
+                    time.sleep(0.1)
+
+                    #keep updating its position
+                    self.x = self.odom_frame_x + self.odom_x 
+                    self.y = self.odom_frame_y + self.odom_y
+
+                #stop bot 
+                self.stopbot()
+        except:
+            self.stopbot()
+        finally:
+            self.stopbot()
             
 
     def stopbot(self):
@@ -155,10 +182,10 @@ class navigationControl(Node):
                 continue
             # self.x = self.odom_frame_x + self.odom_x #might have problems with the delay but fk it lah
             # self.y = self.odom_frame_y + self.odom_y
-            # cmap= costmap(self.data, self.width, self.height)
-            # np.savetxt('cmap.csv', cmap, delimiter=',')
+            # self.cmap= costmap(self.data, self.width, self.height)
+            # np.savetxt('cmap.csv', self.cmap, delimiter=',')
             # index_x = int((self.x - self.originX)/self.resolution)
-            # index_y = len(cmap) - int((self.y - self.originY)/self.resolution)
+            # index_y = len(self.cmap) - int((self.y - self.originY)/self.resolution)
             # print(index_x, index_y)
             # twist.angular.z = math.pi/4
             # self.twist_publisher.publish(twist)

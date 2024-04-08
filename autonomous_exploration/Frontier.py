@@ -4,7 +4,6 @@ expansion_size = 1
 
 def costmap(data,width,height): #convert data from 1D array to 2D array 
     data = np.array(data).reshape(height,width)
-    np.savetxt('data.csv', data)
     condition = np.logical_and(data > -1, data < 50)
     data = np.where(condition, 0, data) #make everything < 5e+01 but not -1 open space
     data = np.where(data > 50, 100, data) #make everything > 5e+01 but not -1 obstacle

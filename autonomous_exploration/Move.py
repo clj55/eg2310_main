@@ -1,6 +1,7 @@
 import math
 
 target_error = 0.1
+factor = 0.3
 
 
 
@@ -28,7 +29,7 @@ def vroom(target_x, target_y, curr_x, curr_y, curr_heading,v_speed, w_speed):
         desired_steering_angle += 2 * math.pi
     
     v = v_speed
-    w = desired_steering_angle
+    w = desired_steering_angle * factor
     if abs(desired_steering_angle) > math.pi/2:
         v = 0.0
     elif desired_steering_angle > math.pi/4:
