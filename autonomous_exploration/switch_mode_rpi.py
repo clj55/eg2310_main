@@ -15,12 +15,11 @@ class RPI(Node):
             self.mode_callback,
             10)
         self.subscription  # prevent unused variable warning
-        self.mode = 'maze'
 
-    def publish_mode(self, ack):
+    def publish_mode(self, mode):
         msg = String()
         #maybe like make sure both programs communicating then publish maze
-        msg.data = ack + self.mode
+        msg.data = mode
         self.publisher_.publish(msg)
         self.get_logger().info('Publishing: "%s"' % msg.data)
 
@@ -34,18 +33,21 @@ class RPI(Node):
         self.get_logger().info('Current mode %s' % self.mode)
     
     def do_smth(self):
-        while True:
-            counter = 0
-            while self.mode == 'line' and counter < 2:
-                rclpy.spin_once(RPI)
-                print('Line mode')
-                time.sleep(3)
-                counter += 1
+        # rclpy.spin_once(RPI)
+        self.publish_mode('explore')
+        self.publish_mode('explore')
+        # while True:
+        #     counter = 0
+        #     while self.mode == 'line' and counter < 2:
+        #         rclpy.spin_once(RPI)
+        #         print('Line mode')
+        #         time.sleep(3)
+        #         counter += 1
             
-            if self.mode == 'line': #switch mode
-                self.mode = 'explore'
-                print('Explore Mode')
-                self.publish_mode()
+        #     if self.mode == 'line': #switch mode
+        #         self.mode = 'explore'
+        #         print('Explore Mode')
+        #         self.publish_mode()
         
         
 

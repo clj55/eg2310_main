@@ -1,5 +1,8 @@
 import numpy as np
 import math
+import heapq
+import random 
+target_error = 0.1
 expansion_size = 1
 
 def costmap(data,width,height): #convert data from 1D array to 2D array 
@@ -75,28 +78,191 @@ def dfs(matrix, i, j, group_num, groups):
     #increase group number when all frontier cells in 1 grp found 
     return group_num + 1
 
-def calculate_centroid(group):
-    x_coords = []
-    y_coords = []
-    for cell in group:
-        x_coords.append(cell[0])
-        y_coords.append(cell[1])
+#############################################################
+def heuristic(a, b):
+    print("HEURISTIC")
+    return np.sqrt((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2)
+
+def pathLength(path):
+    print("PATHLENGTH")
+    for i in range(len(path)):
+        path[i] = (path[i][0],path[i][1])
+        points = np.array(path)
+    differences = np.diff(points, axis=0)
+    distances = np.hypot(differences[:,0], differences[:,1])
+    total_distance = np.sum(distances)
+    return total_distance
+
+def astar(array, start, goal):
+    print("ASTAR")
+    neighbors = [(0,1),(0,-1),(1,0),(-1,0),(1,1),(1,-1),(-1,1),(-1,-1)]
+    close_set = set()
+    came_from = {}
+    gscore = {start:0}
+    fscore = {start:heuristic(start, goal)}
+    oheap = []
+    heapq.heappush(oheap, (fscore[start], start))
+    while oheap:
+        current = heapq.heappop(oheap)[1]
+        if current == goal:
+            data = []
+            while current in came_from:
+                data.append(current)
+                current = came_from[current]
+            data = data + [start]
+            data = data[::-1]
+            return data
+        close_set.add(current)
+        for i, j in neighbors:
+            neighbor = current[0] + i, current[1] + j
+            tentative_g_score = gscore[current] + heuristic(current, neighbor)
+            if 0 <= neighbor[0] < array.shape[0]:
+                if 0 <= neighbor[1] < array.shape[1]:                
+                    if array[neighbor[0]][neighbor[1]] == 1:
+                        continue
+                else:
+                    # array bound y walls
+                    continue
+            else:
+                # array bound x walls
+                continue
+            if neighbor in close_set and tentative_g_score >= gscore.get(neighbor, 0):
+                continue
+            if  tentative_g_score < gscore.get(neighbor, 0) or neighbor not in [i[1]for i in oheap]:
+                came_from[neighbor] = current
+                gscore[neighbor] = tentative_g_score
+                fscore[neighbor] = tentative_g_score + heuristic(neighbor, goal)
+                heapq.heappush(oheap, (fscore[neighbor], neighbor))
+    # If no path to goal was found, return closest path to goal
+    if goal not in came_from:
+        closest_node = None
+        closest_dist = float('inf')
+        for node in close_set:
+            dist = heuristic(node, goal)
+            if dist < closest_dist:
+                closest_node = node
+                closest_dist = dist
+        if closest_node is not None:
+            data = []
+            while closest_node in came_from:
+                data.append(closest_node)
+                closest_node = came_from[closest_node]
+            data = data + [start]
+            data = data[::-1]
+            return data
+    return False
+
+def findClosestGroup(matrix,groups, current,resolution,originX,originY):
+    print("FINDCLOSESTGROUP")
+    targetP = None
+    distances = []
+    paths = []
+    score = []
+    max_score = -1 #max score index
+    for i in range(len(groups)):
+        middle = calculate_centroid([p[0] for p in groups[i][1]],[p[1] for p in groups[i][1]]) 
+        path = astar(matrix, current, middle)
+        path = [(p[1]*resolution+originX,p[0]*resolution+originY) for p in path]
+        total_distance = pathLength(path)
+        distances.append(total_distance)
+        paths.append(path)
+    for i in range(len(distances)):
+        if distances[i] == 0:
+            score.append(0)
+        else:
+            score.append(len(groups[i][1])/distances[i])
+    for i in range(len(distances)):
+        if distances[i] > target_error*3:
+            if max_score == -1 or score[i] > score[max_score]:
+                max_score = i
+    if max_score != -1:
+        targetP = paths[max_score]
+    else: #If the groups are closer than target_error*2 distance, it selects a random point as the target. This allows the robot to escape some situations
+        index = random.randint(0,len(groups)-1)
+        target = groups[index][1]
+        target = target[random.randint(0,len(target)-1)]
+        path = astar(matrix, current, target)
+        targetP = [(p[1]*resolution+originX,p[0]*resolution+originY) for p in path]
+    return targetP
+
+def fGroups(groups):
+    print("FGROUPS")
+    sorted_groups = sorted(groups.items(), key=lambda x: len(x[1]), reverse=True)
+    top_five_groups = [g for g in sorted_groups[:5] if len(g[1]) > 2]    
+    return top_five_groups
+
+def calculate_centroid(x_coords, y_coords):
+    print("CALCULATECENTROID")
     n = len(x_coords)
     sum_x = sum(x_coords)
     sum_y = sum(y_coords)
     mean_x = sum_x / n
     mean_y = sum_y / n
     centroid = (int(mean_x), int(mean_y))
-    return centroid 
+    return centroid
+#################################################
 
-def findClosesttoGoal(groups, target_x, target_y):
+# def calculate_centroid(group):
+#     x_coords = []
+#     y_coords = []
+#     for cell in group:
+#         x_coords.append(cell[0])
+#         y_coords.append(cell[1])
+#     n = len(x_coords)
+#     sum_x = sum(x_coords)
+#     sum_y = sum(y_coords)
+#     mean_x = sum_x / n
+#     mean_y = sum_y / n
+#     centroid = (int(mean_x), int(mean_y))
+#     return centroid 
+
+def findClosesttoGoal(cmap, groups, target_x, target_y, curr_x, curr_y, resolution):
+    print("FINDCLOSESTTOGOAL")
     centroids = []
     dists = []
     for group in groups:
-        centroids.append(calculate_centroid(group))
+        centroid = calculate_centroid(group)
+        if ableToTravel(cmap, centroid[0], centroid[1], curr_x, curr_y, resolution):
+            centroids.append()
     for centroid in centroids:
         dists.append(math.dist(centroid, (target_x, target_y)))
     min_index = dists.index(min(dists))
+    if centroids:
+        print("No Centroid Found")
+        return None
     return centroids[min_index][0], centroids[min_index][1]
+
+def ableToTravel(map_odata, curr_x_grid, curr_y_grid, target_x_grid, target_y_grid, resolution):
+    margin_grid = (int)(0.1/resolution)
+    #print(margin_grid)
+    if (target_y_grid == curr_y_grid):
+        for x in range (curr_x_grid, target_x_grid, 1):
+            y = target_y_grid
+            if np.any(map_odata[math.floor(y)-margin_grid:math.ceil(y)+margin_grid+1, x] == 100):
+                return False    # meet a wall
+    elif (target_x_grid == curr_x_grid):
+        for y in range (curr_y_grid, target_y_grid, 1):
+            x = target_x_grid
+            if np.any(map_odata[math.floor(y)-margin_grid:math.ceil(y)+margin_grid+1, x] == 100):
+                return False    # meet a wall
+    else:
+        gradient = float(target_y_grid - curr_y_grid)/float(target_x_grid - curr_x_grid) 
+        x_init = curr_x_grid #for iteration
+        y_init = curr_y_grid
+        x_dest = target_x_grid
+        if curr_x_grid > target_x_grid:
+            x_init = target_x_grid
+            y_init = target_y_grid
+            x_dest = curr_x_grid
+        for x in range (x_init + 1, x_dest, 1):
+            y = gradient * (x - x_init) + y_init
+            if map_odata[math.ceil(y), x] == 100 or map_odata[math.floor(y), x] == 100:
+                return False    # meet a wall
+    return True
+
+
+
+
+    
 
 

@@ -64,7 +64,3 @@ def astar(array, start, goal):
             data = data[::-1]
             return data
     return False
-
-
-array = np.loadtxt('/home/clj55/eg2310_ws/cmap.csv', delimiter=',')
-print(astar(array, (-15,37),  (94,46)))
