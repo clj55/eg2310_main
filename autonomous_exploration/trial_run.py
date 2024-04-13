@@ -58,7 +58,7 @@ mapfile = 'map.txt'
 occfile = 'occ.txt'
 lookahead_distance = 0.24
 target_error = 0.15
-speed = 0.05
+speed = 0.06
 robot_r = 0.4
 avoid_angle = math.pi/3
 
@@ -510,7 +510,7 @@ class MinimalSubscriber(Node):
                     w = math.pi/4
                     break
         return v,w
-    def pick_directionsdf(self):
+    def pick_furthestdistance(self):
         # self.get_logger().info('In pick_direction')
         if self.laser_range.size != 0:
             # use nanargmax as there are nan's in laser_range added to replace 0's
@@ -530,7 +530,7 @@ class MinimalSubscriber(Node):
         twist.angular.z = 0.0
         # not sure if this is really necessary, but things seem to work more
         # reliably with this
-        time.sleep(1)
+        # time.sleep(1)
         self.publisher_.publish(twist)
 
     def stopbot(self):
@@ -608,31 +608,32 @@ class MinimalSubscriber(Node):
             # while self.occ_count[self.target[1]][self.target[0]] != 1:
             # while (abs(self.curr_x - self.target[0]) < target_error and abs(self.curr_y - self.target[1]) < target_error):
             avoided_before = False
-            while self.curr_x != self.target[0] and self.curr_y != self.target[1] and self.has_target:
+            while self.has_target and self.curr_x != self.target[0] and self.curr_y != self.target[1]:
                 rclpy.spin_once(self)
                 if self.laser_range.size != 0:
-                    left_lri = (self.laser_range[left_front_angles]<float(stop_distance)).nonzero()
-                    right_lri = (self.laser_range[right_front_angles]<float(stop_distance)).nonzero()
-
                     lri = (self.laser_range[front_angles]<float(stop_distance)).nonzero()
-                    # self.get_logger().info('Distances: %s' % str(lri))
-                    # check distances in front of TurtleBot and find values less
-                    # than stop_distance
-                    # leftAmin rightAmin
-                    # if len(left_lri[0]) > 0:
-                    #     print("Left LRI", left_lri[0][0], left_lri[0][-1])
-                    # if len(right_lri[0]) > 0 or:
+
                     if len(lri[0]) >0:
-                        # print(right_lri[0][0], right_lri[0][-1])
-                        # print("Right LRI: ", right_lri)
-                        # rightAmin
                         self.stopbot()
+
                         # if avoided_before:
                         #     self.has_target = False
                         #     break
+
+                        laser_range = self.laser_range
+                        lri = (laser_range[front_angles]<float(stop_distance)).nonzero() #just update it in case 
+                        leftTurnMin = lri[0][0] - 40
+                        rightTurnMin = lri[0][-1] - 40
                         self.get_logger().info('FINDING OPENING')
-                        rotangle = find_opening(self.laser_range)
+                        rotangle = find_opening(laser_range)
                         self.get_logger().info('Rotating bot')
+                        if rotangle == 0:
+                            self.pick_furthestdistance()
+                        if rotangle < 0 and rotangle > leftTurnMin: # (dealing w -ve angles)
+                            rotangle = leftTurnMin
+                        elif rotangle > 0 and rotangle < rightTurnMin:
+                            rotangle = rightTurnMin
+
                         self.rotatebot(rotangle)
 
                         # avoided_before = True

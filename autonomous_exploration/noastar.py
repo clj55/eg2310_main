@@ -510,6 +510,7 @@ class MinimalSubscriber(Node):
                     w = math.pi/4
                     break
         return v,w
+    
     def pick_directionsdf(self):
         # self.get_logger().info('In pick_direction')
         if self.laser_range.size != 0:

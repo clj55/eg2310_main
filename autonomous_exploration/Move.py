@@ -37,8 +37,7 @@ def find_opening(laserrange):
             #check right side
             right_inner_dist = avg(laserrange[i - 5: i])
             right_outer_dist = avg(laserrange[i:i+5])
-            # print('Right wall dist: ', right_wall_dist)
-            print((right_outer_dist - right_inner_dist) )
+            # print((right_outer_dist - right_inner_dist) )
 
             if (right_outer_dist - right_inner_dist) > 0.2: # if wall is infront of robot
                 # opening right outer
@@ -56,7 +55,7 @@ def find_opening(laserrange):
             #check left side 
             left_inner_dist = avg(laserrange[-i-5:-i])
             left_outer_dist = avg(laserrange[-i-10: -i-5]) 
-            # print('Left wall dist: ', left_wall_dist)
+            print('Left wall dist: ', left_outer_dist- left_inner_dist)
             if not LeftFound and (left_outer_dist- left_inner_dist) > 0.2:
                 left_angle = i 
                 LeftFound = True
@@ -101,8 +100,9 @@ def find_opening(laserrange):
     else:
         print("knn find opening also cannot")
         print("opening straight ahead?")
-        laser_angle = 0
-        wall_dist = laserrange[0]
+        # laser_angle = 0
+        # wall_dist = laserrange[0]
+        return 0
     
     actl_angle = scale_angle(laser_angle, len(laserrange))
     add_angle = math.atan(TURTLEBOT_RADIUS/wall_dist)
