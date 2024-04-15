@@ -40,8 +40,8 @@ import scipy.stats
 import heapq, math, random
 import sys
 
-from Move import pick_direction, find_opening
-from Frontier import find_frontier_cells, assign_groups, fGroups, findClosestGroup
+from Move import pick_direction, find_opening, find_next_point
+from Frontier import find_frontier_cells, assign_groups, fGroups, findClosestGroup, costmap
 # constants
 rotatechange = 0.5
 speedchange = 0.05
@@ -61,6 +61,9 @@ target_error = 0.15
 speed = 0.05
 robot_r = 0.4
 avoid_angle = math.pi/3
+BLACK_CELL = 0
+expansion_size = 1
+
 
 def euler_from_quaternion(x, y, z, w):
     """
@@ -132,11 +135,17 @@ class MinimalSubscriber(Node):
         # self.i = 0
         self.has_target = False
         self.path = []
+        self.middles = []
 
-    def coords_to_real(self, coordinates):
-        new_coordinates_x = coordinates[0]*self.map_res + self.map_origin.x 
-        new_coordinates_y = coordinates[1]*self.map_res + self.map_origin.y 
-        return (new_coordinates_x, new_coordinates_y)
+    def grid_to_real(self, coordinates_x, coordinates_y ):
+        new_coordinates_x = coordinates_x*self.map_res + self.map_origin.x 
+        new_coordinates_y = coordinates_y*self.map_res + self.map_origin.y 
+        return new_coordinates_x, new_coordinates_y
+    
+    def real_to_grid(self, real_x, real_y):
+        grid_x = round((real_x - self.map_origin.x) / self.map_res)
+        grid_y = round((real_y - self.map_origin.y) / self.map_res)
+        return grid_x, grid_y
 
     def scan_callback(self, msg):
         # self.get_logger().info('In scan_callback')
@@ -161,6 +170,8 @@ class MinimalSubscriber(Node):
         # calculate total number of bins
         iwidth = msg.info.width
         iheight = msg.info.height
+        self.occ_height = iheight
+        self.occ_width = iwidth
         total_bins = iwidth * iheight
         # log the info
         # self.get_logger().info('Unmapped: %i Unoccupied: %i Occupied: %i Total: %i' % (occ_counts[0][0], occ_counts[0][1], occ_counts[0][2], total_bins))
@@ -187,14 +198,16 @@ class MinimalSubscriber(Node):
         map_res = msg.info.resolution
         # get map origin struct has fields of x, y, and z
         map_origin = msg.info.origin.position
-        # get map grid positions for x, y position
-        grid_x = round((cur_pos.x - map_origin.x) / map_res)
-        grid_y = round(((cur_pos.y - map_origin.y) / map_res))
-        self.curr_x = grid_x
-        self.curr_y = grid_y
-        self.cur_pos = cur_pos
+        
+        self.real_x = cur_pos.x
+        self.real_y = cur_pos.y
         self.map_res = map_res
         self.map_origin = map_origin
+
+        # get map grid positions for x, y position
+        grid_x, grid_y = self.real_to_grid(cur_pos.x, cur_pos.y)
+        self.curr_x = grid_x
+        self.curr_y = grid_y
 
         # self.get_logger().info('Grid Y: %i Grid X: %i' % (grid_y, grid_x))
 
@@ -210,9 +223,24 @@ class MinimalSubscriber(Node):
         # MAIN
 
         to_print = np.copy(odata)
+        # if hasattr(self, 'path'):
+        #     for p in self.path:
+        #         x = round((p[0]- map_origin.x) / map_res)
+        #         y = round((p[1]- map_origin.y) / map_res)
+        #         to_print[y][x] = 0
+
         if hasattr(self, 'target'):
             p = self.target
-            to_print[p[1]][p[0]] = 0
+            x = round((p[0]- map_origin.x) / map_res)
+            y = round((p[1]- map_origin.y) / map_res)
+            to_print[y][x] = 0
+
+        if hasattr(self, 'nextpoint'):
+            p = self.nextpoint
+            x = round((p[0]- map_origin.x) / map_res)
+            y = round((p[1]- map_origin.y) / map_res)
+            to_print[y][x] = 0
+
 
         # odata[0][0] = 3
         # self.get_logger().info('origin: %i, %i' % (round(map_origin.x),round(map_origin.y)))
@@ -307,85 +335,6 @@ class MinimalSubscriber(Node):
                         queue.append((new_x, new_y, distance + 1))
         return None
 
-    def heuristic(self, a, b):
-        return np.sqrt((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2)
-
-    def astar(self):
-        array = self.occ_count
-        start = (self.curr_x, self.curr_y)
-        goal = self.target
-        # array: occ_count data
-        # print('currently in astar')
-        #neighbors = [(0,1),(0,-1),(1,0),(-1,0),(1,1),(1,-1),(-1,1),(-1,-1)]
-        neighbors = [(0,1),(0,-1),(1,0),(-1,0)]
-        close_set = set()
-        came_from = {}
-        gscore = {start:0}
-        fscore = {start:self.heuristic(start, goal)}
-        oheap = []
-        heapq.heappush(oheap, (fscore[start], start))
-        while oheap:
-            current = heapq.heappop(oheap)[1] # pops top of heap, accesses second element ((row, col) coordinates of point)
-            if current == goal:
-                data = []
-                while current in came_from:
-                    data.append(current)
-                    current = came_from[current]
-                # data holds the path taken to the goal
-                data = data + [start]
-                data = data[::-1] # reverses order of elements so data returns a list [start, ..., goal] of the path taken
-                # data = [self.coords_to_real(p) for p in data]
-                # print('exiting astar')
-                return data
-            # if goal has not been reached ...
-            close_set.add(current)
-            for i, j in neighbors:
-                neighbor = current[0] + i, current[1] + j
-                tentative_g_score = gscore[current] + self.heuristic(current, neighbor)
-                if 0 <= neighbor[0] < array.shape[0]: # checks if neighbour's y coordinate is within range
-                    if 0 <= neighbor[1] < array.shape[1]:                # checks if neighbour's x coordinate is within range
-                        # if array[neighbor[0]][neighbor[1]] == 1:
-                        if array[neighbor[0]][neighbor[1]] == 3:
-                            continue
-                    else:
-                        # array bound y walls
-                        continue
-                else:
-                    # array bound x walls
-                    continue
-                # skips to next neighbour if not within image or is an obstacle
-                if neighbor in close_set and tentative_g_score >= gscore.get(neighbor, 0):
-                    # neighbour already seen and not a shorter path
-                    continue
-                if  tentative_g_score < gscore.get(neighbor, 0) or neighbor not in [i[1]for i in oheap]:
-                    # there exists a shorter path to neighbour, or neighbour has not been visited
-                    # then save all your shit
-                    came_from[neighbor] = current
-                    gscore[neighbor] = tentative_g_score
-                    fscore[neighbor] = tentative_g_score + self.heuristic(neighbor, goal)
-                    heapq.heappush(oheap, (fscore[neighbor], neighbor))
-        # If no path to goal was found, return closest path to goal
-        if goal not in came_from:
-            closest_node = None
-            closest_dist = float('inf')
-            for node in close_set:
-                # runs through every node that has had a path calculated, returns the path to the node closest to the goal
-                dist = self.heuristic(node, goal)
-                if dist < closest_dist:
-                    closest_node = node
-                    closest_dist = dist
-            if closest_node is not None:
-                data = []
-                while closest_node in came_from:
-                    data.append(closest_node)
-                    closest_node = came_from[closest_node]
-                data = data + [start]
-                data = data[::-1]
-                # data = [self.coords_to_real(p) for p in data]
-                # print('exiting astar')
-                return data
-        # print('exiting astar')
-        return False
 
     def pure_pursuit(self):
         # print('in pure pursuit')
@@ -511,7 +460,7 @@ class MinimalSubscriber(Node):
                     break
         return v,w
     
-    def pick_directionsdf(self):
+    def pick_furthestdistance(self):
         # self.get_logger().info('In pick_direction')
         if self.laser_range.size != 0:
             # use nanargmax as there are nan's in laser_range added to replace 0's
@@ -597,30 +546,42 @@ class MinimalSubscriber(Node):
 
     def integration(self):
         if self.has_target:
-            desired_steering_angle= pick_direction(self.target[0], self.target[1], self.curr_x, self.curr_y, self.yaw)
+            desired_steering_angle= pick_direction(self.nextpoint[0], self.nextpoint[1], self.curr_x, self.curr_y, self.yaw)
             self.rotatebot(desired_steering_angle)
             
             # while self.occ_count[self.target[1]][self.target[0]] != 1:
             # while (abs(self.curr_x - self.target[0]) < target_error and abs(self.curr_y - self.target[1]) < target_error):
             avoided_before = False
-            while self.curr_x != self.target[0] and self.curr_y != self.target[1] and self.has_target:
+            while self.has_target and self.curr_x != self.target[0] and self.curr_y != self.target[1]:
                 rclpy.spin_once(self)
                 if self.laser_range.size != 0:
                     lri = (self.laser_range[front_angles]<float(stop_distance)).nonzero()
-                    # self.get_logger().info('Distances: %s' % str(lri))
 
-                    # check distances in front of TurtleBot and find values less
-                    # than stop_distance
-                    if(len(lri[0])>0):
+                    if len(lri[0]) >0:
                         self.stopbot()
-                        if avoided_before:
-                            self.has_target = False
-                            break
+
+                        # if avoided_before:
+                        #     self.has_target = False
+                        #     break
+
+                        laser_range = self.laser_range
+                        lri = (laser_range[front_angles]<float(stop_distance)).nonzero() #just update it in case 
+                        leftTurnMin = lri[0][0] - 40
+                        rightTurnMin = lri[0][-1] - 40
                         self.get_logger().info('FINDING OPENING')
-                        desired_steering_angle = find_opening(self.laser_range)
+                        rotangle = find_opening(laser_range, )
                         self.get_logger().info('Rotating bot')
-                        self.rotatebot(desired_steering_angle)
-                        # self.move_forward(0.5)
+
+                        #Make sure robot is turning enuf so that it doesnt redetect the same angle in it 
+                        if rotangle == 0:
+                            self.pick_furthestdistance()
+                        if rotangle < 0 and rotangle > leftTurnMin: # (dealing w -ve angles)
+                            rotangle = leftTurnMin
+                        elif rotangle > 0 and rotangle < rightTurnMin:
+                            rotangle = rightTurnMin
+
+                        self.rotatebot(rotangle)
+
                         avoided_before = True
                         
                     else:
@@ -628,28 +589,55 @@ class MinimalSubscriber(Node):
 
             # if self.i == (len(self.path) - 1):
             # print('target data: ' + str(self.occ_count[self.target[1]][self.target[0]])) 
-            
-            self.has_target = False
-            self.stopbot()
+            self.get_logger().info('Broke out of loop')
+
+
+
+        
+        #     self.has_target = False
+        #     self.stopbot()
         else:
             self.get_logger().info('FINDING NEW TARGET')
             self.exclude = set()
             matrix = self.occ_count
+            # matrix = costmap(self.occ_count, self.occ_width, self.occ_height, self.map_res, expansion_size) #not sure if should costmap here or after find frontier cells
+            np.savetxt('matrix.csv', matrix, delimiter = ',')
+            self.get_logger().info('Find frontier cells')
             data = find_frontier_cells(matrix) #Find Frontiers
-            groups = assign_groups(data) #Group Frontiers
+            np.savetxt('frontier.csv', data, delimiter = ',')
+
+            # COORDINATES ARE IN ROW COLUMN FORMAT 
+            self.get_logger().info('Assign groups')
+            groups = assign_groups(data) #Group Frontiers 
+            self.get_logger().info('Sort groups')
             groups = fGroups(groups) #Sort the groups from smallest to largest. Get the 5 biggest groups
+
+            # print(groups)
             if len(groups) == 0:
                 print('No groups found exploration complete')
                 sys.exit
             
             else:
-                self.target = findClosestGroup(matrix, groups, (self.curr_x, self.curr_y), self.map_res, self.map_origin.x, self.map_origin.y)[-1]
-                print(self.target)
+                #ALL IN ROW COLUMN FORMAT 
+                grid_pos = (self.curr_y, self.curr_x)  # ROW, COLUMN
+                self.path = findClosestGroup(matrix, groups, grid_pos, self.map_res, self.map_origin.x, self.map_origin.y)
+                self.target = self.path[-1]
+                nextpoint_real, self.path = find_next_point(self.real_x, self.real_y, self.path)
+                self.nextpoint = (self.real_to_grid(nextpoint_real[0], nextpoint_real[1]))
+                print("Next point:", self.nextpoint)
+                # print("Cut path:", self.path)
+                # print("Current position:", self.real_x, self.real_y)
+                
+                #NOW IN REAL COORDIANTES
+                print("Target:", self.target) 
+                # self.path = a_star(curr_pos, self.target, 
+                # print("Path:", self.path)
+                # for i in self.path:
             # self.target = self.bfs()
             # self.get_logger().info('Target %s' % self.target)
-            if not self.target:
-                print('exploration complete')
-                sys.exit
+            # if not self.target:
+            #     print('exploration complete')
+            #     sys.exit
             '''
             # grid_target_x = round(((target[0] - map_origin.x) / map_res))
             # grid_target_y = round(((target[1] - map_origin.y) / map_res))

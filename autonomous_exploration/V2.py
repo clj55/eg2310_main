@@ -1,4 +1,4 @@
-#Copyright 2016 Open Source Robotics Foundation, Inc.
+# Copyright 2016 Open Source Robotics Foundation, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -25,7 +25,6 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import OccupancyGrid
 from collections import deque
-from std_msgs.msg import String
 
 #for plotting
 import tf2_ros
@@ -41,16 +40,16 @@ import scipy.stats
 import heapq, math, random
 import sys
 
-from Move import pick_direction, find_opening
-from Frontier import find_frontier_cells, assign_groups, fGroups
+from Move import pick_direction, direct_opening, find_next_point
+from Frontier import find_frontier_cells, assign_groups, fGroups, findClosestGroup, costmap
 # constants
 rotatechange = 0.5
-speedchange = -0.08
+speedchange = 0.07
 #occ_bins = [-1, 0, 100, 101]
 occ_bins = [-1, 0, 50, 100]
 map_bg_color = 1
-stop_distance = 0.25
-front_angle = 20
+stop_distance = 0.30
+front_angle = 30
 front_angles = range(-front_angle,front_angle+1,1)
 left_front_angles = range(0, front_angle + 1, 1)
 right_front_angles = range(-front_angle, 0, 1)
@@ -59,9 +58,12 @@ mapfile = 'map.txt'
 occfile = 'occ.txt'
 lookahead_distance = 0.24
 target_error = 0.15
-speed = 0.06
+speed = 0.05
 robot_r = 0.4
 avoid_angle = math.pi/3
+BLACK_CELL = 0
+expansion_size = 1
+
 
 def euler_from_quaternion(x, y, z, w):
     """
@@ -130,28 +132,21 @@ class MinimalSubscriber(Node):
         self.scan_subscription  # prevent unused variable warning
         self.laser_range = np.array([])
 
-        self.mode_subscription = self.create_subscription(
-            String,
-            'mode',
-            self.mode_callback,
-            10
-        )
-
         # self.i = 0
         self.has_target = False
         self.path = []
-        self.activate = False
+        self.middles = []
 
-    def coords_to_real(self, coordinates):
-        new_coordinates_x = coordinates[0]*self.map_res + self.map_origin.x 
-        new_coordinates_y = coordinates[1]*self.map_res + self.map_origin.y 
-        return (new_coordinates_x, new_coordinates_y)
+    def grid_to_real(self, coordinates_x, coordinates_y ):
+        new_coordinates_x = coordinates_x*self.map_res + self.map_origin.x 
+        new_coordinates_y = coordinates_y*self.map_res + self.map_origin.y 
+        return new_coordinates_x, new_coordinates_y
     
-    def mode_callback(self, msg):
-        self.get_logger().info('I heard: "%s"' % msg.data)
-        if msg.data == 'explore':
-            self.activate = True
-    
+    def real_to_grid(self, real_x, real_y):
+        grid_x = round((real_x - self.map_origin.x) / self.map_res)
+        grid_y = round((real_y - self.map_origin.y) / self.map_res)
+        return grid_x, grid_y
+
     def scan_callback(self, msg):
         # self.get_logger().info('In scan_callback')
         # create numpy array
@@ -175,6 +170,8 @@ class MinimalSubscriber(Node):
         # calculate total number of bins
         iwidth = msg.info.width
         iheight = msg.info.height
+        self.occ_height = iheight
+        self.occ_width = iwidth
         total_bins = iwidth * iheight
         # log the info
         # self.get_logger().info('Unmapped: %i Unoccupied: %i Occupied: %i Total: %i' % (occ_counts[0][0], occ_counts[0][1], occ_counts[0][2], total_bins))
@@ -201,14 +198,16 @@ class MinimalSubscriber(Node):
         map_res = msg.info.resolution
         # get map origin struct has fields of x, y, and z
         map_origin = msg.info.origin.position
-        # get map grid positions for x, y position
-        grid_x = round((cur_pos.x - map_origin.x) / map_res)
-        grid_y = round(((cur_pos.y - map_origin.y) / map_res))
-        self.curr_x = grid_x
-        self.curr_y = grid_y
-        self.cur_pos = cur_pos
+        
+        self.real_x = cur_pos.x
+        self.real_y = cur_pos.y
         self.map_res = map_res
         self.map_origin = map_origin
+
+        # get map grid positions for x, y position
+        grid_x, grid_y = self.real_to_grid(cur_pos.x, cur_pos.y)
+        self.curr_x = grid_x
+        self.curr_y = grid_y
 
         # self.get_logger().info('Grid Y: %i Grid X: %i' % (grid_y, grid_x))
 
@@ -224,9 +223,22 @@ class MinimalSubscriber(Node):
         # MAIN
 
         to_print = np.copy(odata)
+        # if hasattr(self, 'path'):
+        #     for p in self.path:
+        #         x = round((p[0]- map_origin.x) / map_res)
+        #         y = round((p[1]- map_origin.y) / map_res)
+        #         to_print[y][x] = 0
+
         if hasattr(self, 'target'):
             p = self.target
+            x = round((p[0]- map_origin.x) / map_res)
+            y = round((p[1]- map_origin.y) / map_res)
+            to_print[y][x] = 0
+
+        if hasattr(self, 'nextpoint'):
+            p = self.nextpoint
             to_print[p[1]][p[0]] = 0
+
 
         # odata[0][0] = 3
         # self.get_logger().info('origin: %i, %i' % (round(map_origin.x),round(map_origin.y)))
@@ -321,165 +333,13 @@ class MinimalSubscriber(Node):
                         queue.append((new_x, new_y, distance + 1))
         return None
 
-    def heuristic(self, a, b):
-        return np.sqrt((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2)
 
-    def astar(self):
-        array = self.occ_count
-        start = (self.curr_x, self.curr_y)
-        goal = self.target
-        # array: occ_count data
-        # print('currently in astar')
-        #neighbors = [(0,1),(0,-1),(1,0),(-1,0),(1,1),(1,-1),(-1,1),(-1,-1)]
-        neighbors = [(0,1),(0,-1),(1,0),(-1,0)]
-        close_set = set()
-        came_from = {}
-        gscore = {start:0}
-        fscore = {start:self.heuristic(start, goal)}
-        oheap = []
-        heapq.heappush(oheap, (fscore[start], start))
-        while oheap:
-            current = heapq.heappop(oheap)[1] # pops top of heap, accesses second element ((row, col) coordinates of point)
-            if current == goal:
-                data = []
-                while current in came_from:
-                    data.append(current)
-                    current = came_from[current]
-                # data holds the path taken to the goal
-                data = data + [start]
-                data = data[::-1] # reverses order of elements so data returns a list [start, ..., goal] of the path taken
-                # data = [self.coords_to_real(p) for p in data]
-                # print('exiting astar')
-                return data
-            # if goal has not been reached ...
-            close_set.add(current)
-            for i, j in neighbors:
-                neighbor = current[0] + i, current[1] + j
-                tentative_g_score = gscore[current] + self.heuristic(current, neighbor)
-                if 0 <= neighbor[0] < array.shape[0]: # checks if neighbour's y coordinate is within range
-                    if 0 <= neighbor[1] < array.shape[1]:                # checks if neighbour's x coordinate is within range
-                        # if array[neighbor[0]][neighbor[1]] == 1:
-                        if array[neighbor[0]][neighbor[1]] == 3:
-                            continue
-                    else:
-                        # array bound y walls
-                        continue
-                else:
-                    # array bound x walls
-                    continue
-                # skips to next neighbour if not within image or is an obstacle
-                if neighbor in close_set and tentative_g_score >= gscore.get(neighbor, 0):
-                    # neighbour already seen and not a shorter path
-                    continue
-                if  tentative_g_score < gscore.get(neighbor, 0) or neighbor not in [i[1]for i in oheap]:
-                    # there exists a shorter path to neighbour, or neighbour has not been visited
-                    # then save all your shit
-                    came_from[neighbor] = current
-                    gscore[neighbor] = tentative_g_score
-                    fscore[neighbor] = tentative_g_score + self.heuristic(neighbor, goal)
-                    heapq.heappush(oheap, (fscore[neighbor], neighbor))
-        # If no path to goal was found, return closest path to goal
-        if goal not in came_from:
-            closest_node = None
-            closest_dist = float('inf')
-            for node in close_set:
-                # runs through every node that has had a path calculated, returns the path to the node closest to the goal
-                dist = self.heuristic(node, goal)
-                if dist < closest_dist:
-                    closest_node = node
-                    closest_dist = dist
-            if closest_node is not None:
-                data = []
-                while closest_node in came_from:
-                    data.append(closest_node)
-                    closest_node = came_from[closest_node]
-                data = data + [start]
-                data = data[::-1]
-                # data = [self.coords_to_real(p) for p in data]
-                # print('exiting astar')
-                return data
-        # print('exiting astar')
-        return False
-
-    def pure_pursuit(self):
-        # print('in pure pursuit')
-        current_x = self.curr_x
-        current_y = self.curr_y
-        current_heading = self.yaw
-        path = self.path
-        global lookahead_distance
-        closest_point = None
-        v = speed
-        closest_distance = float('inf')
-        index = self.i
-
-        '''
-        for i in range(self.i,len(path)):
-            # looks for point in path that distance > lookahead to current position
-            x = path[i][1]
-            y = path[i][0]
-            distance = math.hypot(current_x - x, current_y - y) # euclidean distance from point that robot is heading to
-            if lookahead_distance < distance:
-                closest_point = (x, y)
-                self.i = i
-                print('updated self.i to ' + str(i) + ': ' + str(self.i))
-                break
-        '''
-        for i in range(index, len(path)):
-        #for i in range(self.i,len(path)):
-            # looks for point in path that distance > lookahead to current position
-            x = path[i][0]
-            y = path[i][1]
-            distance = math.hypot(current_x - x, current_y - y) # euclidean distance from point that robot is heading to
-            if distance < closest_distance:
-                closest_point = (x, y)
-                closest_distance = distance
-                index = i
-        
-        # print('closest point: ' + str(path[index]) + ' with distance ' + str(closest_distance))
-        self.i = index
-        if closest_point is not None:
-            target_heading = math.atan2(closest_point[1] - current_y, closest_point[0] - current_x)
-            desired_steering_angle = target_heading - current_heading
-        else:
-            # no point within lookahead_distance, just go towards path target
-            target_heading = math.atan2(path[-1][1] - current_y, path[-1][0] - current_x)
-            desired_steering_angle = target_heading - current_heading
-            self.i = len(path)-1
-        # desired_steering_angle += math.pi
-        if desired_steering_angle > math.pi:
-            desired_steering_angle -= 2 * math.pi
-        elif desired_steering_angle < -math.pi:
-            desired_steering_angle += 2 * math.pi
-        if desired_steering_angle > math.pi/6 or desired_steering_angle < -math.pi/6:
-            sign = 1 if desired_steering_angle > 0 else -1
-            desired_steering_angle = sign * math.pi/4
-            v = 0.0
-        # print('ending pure pursuit')
-        return v,desired_steering_angle
 
     def mover(self):
         try:
             while rclpy.ok():
                 rclpy.spin_once(self)
-                '''
-                if self.laser_range.size != 0:
-                    # check distances in front of TurtleBot and find values less
-                    # than stop_distance
-                    lri = (self.laser_range[front_angles]<float(stop_distance)).nonzero()
-                    # self.get_logger().info('Distances: %s' % str(lri))
-
-                    # if the list is not empty
-                    if(len(lri[0])>0):
-                        # stop moving
-                        self.stopbot()
-                        # find direction with the largest distance from the Lidar
-                        # rotate to that direction
-                        # start moving
-                        self.pick_direction()
-                '''
-
-                if self.activate and np.size(self.occdata) != 0 and np.size(self.laser_range)!= 0:
+                if np.size(self.occdata) != 0 and np.size(self.laser_range)!= 0:
                     self.integration()
         except Exception as e:
             print(e)
@@ -489,42 +349,7 @@ class MinimalSubscriber(Node):
             # stop moving
             self.stopbot()
 
-    def avoid(self, left):
-        if left:
-            self.rotatebot(-rotatechange)
-            # self.rotatebot(-avoid_angle)
-            print('avoiding left')
-        else:
-            self.rotatebot(rotatechange)
-            # self.rotatebot(avoid_angle)
-            print('avoiding right')
-        twist = Twist()
-        twist.linear.x = speedchange
-        self.publisher_.publish(twist)
-        time.sleep(0.1)
-        rclpy.spin_once(self)
-        self.path = self.astar()
-
-    def object_avoidance(self):
-        # print('in object avoidance')
-        v = None
-        w = None
-        for i in range(60):
-        # for i in range(45): # to account for funky lidar
-            if self.laser_range[i] < robot_r:
-                print('OBJECT: avoiding front left')
-                v = speed
-                w = -math.pi/4 
-                break
-        if v == None:
-            for i in range(300,360):
-            # for i in range(225, 270):
-                if self.laser_range[i] < robot_r:
-                    print('OBJECT: avoiding front right')
-                    v = speed
-                    w = math.pi/4
-                    break
-        return v,w
+    
     def pick_furthestdistance(self):
         # self.get_logger().info('In pick_direction')
         if self.laser_range.size != 0:
@@ -545,7 +370,7 @@ class MinimalSubscriber(Node):
         twist.angular.z = 0.0
         # not sure if this is really necessary, but things seem to work more
         # reliably with this
-        # time.sleep(1)
+        time.sleep(1)
         self.publisher_.publish(twist)
 
     def stopbot(self):
@@ -590,7 +415,6 @@ class MinimalSubscriber(Node):
         # self.get_logger().info('c_change_dir: %f c_dir_diff: %f' % (c_change_dir, c_dir_diff))
         # if the rotation direction was 1.0, then we will want to stop when the c_dir_diff
         # becomes -1.0, and vice versa
-        
         while(c_change_dir * c_dir_diff > 0):
             # allow the callback functions to run
             rclpy.spin_once(self)
@@ -605,88 +429,88 @@ class MinimalSubscriber(Node):
             # self.get_logger().info('c_change_dir: %f c_dir_diff: %f' % (c_change_dir, c_dir_diff))
 
         self.get_logger().info('End Yaw: %f' % math.degrees(current_yaw))
-
-        # lri = (self.laser_range[front_angles]<float(stop_distance)).nonzero()
-        # while len(lri[0]) > 0:
-        #     lri = (self.laser_range[front_angles]<float(stop_distance)).nonzero()
-        #     print(lri[0])
         # set the rotation speed to 0
         twist.angular.z = 0.0
         # stop the rotation
         self.publisher_.publish(twist)
 
     def integration(self):
-        if self.has_target:
-            desired_steering_angle= pick_direction(self.target[0], self.target[1], self.curr_x, self.curr_y, self.yaw)
-            self.rotatebot(desired_steering_angle)
-            
-            # while self.occ_count[self.target[1]][self.target[0]] != 1:
-            # while (abs(self.curr_x - self.target[0]) < target_error and abs(self.curr_y - self.target[1]) < target_error):
-            avoided_before = False
-            while self.has_target and self.curr_x != self.target[0] and self.curr_y != self.target[1]:
-                rclpy.spin_once(self)
-                if self.laser_range.size != 0:
-                    lri = (self.laser_range[front_angles]<float(stop_distance)).nonzero()
+        # while self.has_target and self.curr_x != self.target[0] and self.curr_y != self.target[1]:
+        rclpy.spin_once(self)
+        if self.laser_range.size != 0:
+            lri = (self.laser_range[front_angles]<float(stop_distance)).nonzero()
 
-                    if len(lri[0]) >0:
-                        self.stopbot()
+            if self.has_target == False or len(lri[0]) >0: #obstacle detected
+                print(self.has_target)
+                self.get_logger().info('No target or OBSTACLE DETECTED')   
+                self.stopbot()
+                laser_range = self.laser_range
+                lri = (laser_range[front_angles]<float(stop_distance)).nonzero() #just update it in case 
 
-                        if avoided_before:
-                            self.has_target = False
-                            break
+                if len(lri[0]) >0: #if actl no obstacle
+                    leftTurnMin = lri[0][0] - 40
+                    rightTurnMin = lri[0][-1] - 40
+                else:
+                    leftTurnMin = -360
+                    rightTurnMin = 0
 
-                        laser_range = self.laser_range
-                        lri = (laser_range[front_angles]<float(stop_distance)).nonzero() #just update it in case 
-                        leftTurnMin = lri[0][0] - 40
-                        rightTurnMin = lri[0][-1] - 40
-                        self.get_logger().info('FINDING OPENING')
-                        rotangle = find_opening(laser_range)
-                        self.get_logger().info('Rotating bot')
-                        if rotangle == 0:
-                            self.pick_furthestdistance()
-                        if rotangle < 0 and rotangle > leftTurnMin: # (dealing w -ve angles)
-                            rotangle = leftTurnMin
-                        elif rotangle > 0 and rotangle < rightTurnMin:
-                            rotangle = rightTurnMin
+                self.find_target()
+                path_angle = pick_direction(self.nextpoint[0], self.nextpoint[1], self.curr_x, self.curr_y, self.yaw)
+                print(path_angle)
 
-                        self.rotatebot(rotangle)
+                self.get_logger().info('FINDING OPENING')
+                rotangle = direct_opening(laser_range, path_angle)
+                self.get_logger().info('Rotating bot')
+                
 
-                        avoided_before = True
-                        
-                    else:
-                        self.move_forward(0.1)
-                        pass
+                #Make sure robot is turning enuf so that it doesnt redetect the same angle in it 
+                if rotangle == 0: #not sure if this will affect it just going forward at the start 
+                    self.pick_furthestdistance()
+                if rotangle < 0 and rotangle > leftTurnMin: # (dealing w -ve angles)
+                    rotangle = leftTurnMin
+                elif rotangle > 0 and rotangle < rightTurnMin:
+                    rotangle = rightTurnMin
+
+                self.rotatebot(rotangle)
+
+            else:
+                self.move_forward(0.1)
 
             # if self.i == (len(self.path) - 1):
             # print('target data: ' + str(self.occ_count[self.target[1]][self.target[0]])) 
-            
-            self.has_target = False
-            self.stopbot()
-        else:
-            self.get_logger().info('FINDING NEW TARGET')
-            self.exclude = set()
+                 
 
-            self.target = self.bfs()
-            # self.get_logger().info('Target %s' % self.target)
-            if not self.target:
-                print('exploration complete')
-                sys.exit
-            '''
-            # grid_target_x = round(((target[0] - map_origin.x) / map_res))
-            # grid_target_y = round(((target[1] - map_origin.y) / map_res))
-            # print('target value: ' + str(odata[grid_target_y][grid_target_x]))
-            # odata[grid_target_y][grid_target_x] = 0
-            # self.path = self.astar()
-            
-            while self.path_is_blocked():
-                self.stopbot()
-                self.exclude.add(self.target)
-                self.target = self.bfs()
-                self.path = self.astar()
-                rclpy.spin_once(self)
-            '''
-            # self.i = 0
-            self.has_target = True
+    def find_target(self):
+        self.get_logger().info('FINDING NEW TARGET')
+        self.exclude = set()
+        matrix = np.copy(self.occ_count)
+        # matrix = costmap(self.occ_count, self.occ_width, self.occ_height, self.map_res, expansion_size) #not sure if should costmap here or after find frontier cells
+        np.savetxt('matrix.csv', matrix, delimiter = ',')
+        self.get_logger().info('Find frontier cells')
+        data = find_frontier_cells(matrix) #Find Frontiers
+        np.savetxt('frontier.csv', data, delimiter = ',')
+
+        # COORDINATES ARE IN ROW COLUMN FORMAT 
+        self.get_logger().info('Assign groups')
+        groups = assign_groups(data) #Group Frontiers 
+        self.get_logger().info('Sort groups')
+        groups = fGroups(groups) #Sort the groups from smallest to largest. Get the 5 biggest groups
+
+        # print(groups)
+        if len(groups) == 0:
+            print('No groups found exploration complete')
+            sys.exit
+        
+        else:
+            #ALL IN ROW COLUMN FORMAT 
+            grid_pos = (self.curr_y, self.curr_x)  # ROW, COLUMN
+            self.path = findClosestGroup(matrix, groups, grid_pos, self.map_res, self.map_origin.x, self.map_origin.y)
+            self.target = self.path[-1]
+            nextpoint_real, self.path = find_next_point(self.real_x, self.real_y, self.path)
+            self.nextpoint = (self.real_to_grid(nextpoint_real[0], nextpoint_real[1]))
+            print("Next point:", self.nextpoint)
+        
+        self.has_target = True
     
     def move_forward(self, seconds):
         twist = Twist()
