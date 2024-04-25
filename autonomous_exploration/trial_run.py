@@ -462,23 +462,7 @@ class MinimalSubscriber(Node):
         try:
             while rclpy.ok():
                 rclpy.spin_once(self)
-                '''
-                if self.laser_range.size != 0:
-                    # check distances in front of TurtleBot and find values less
-                    # than stop_distance
-                    lri = (self.laser_range[front_angles]<float(stop_distance)).nonzero()
-                    # self.get_logger().info('Distances: %s' % str(lri))
-
-                    # if the list is not empty
-                    if(len(lri[0])>0):
-                        # stop moving
-                        self.stopbot()
-                        # find direction with the largest distance from the Lidar
-                        # rotate to that direction
-                        # start moving
-                        self.pick_direction()
-                '''
-
+# 
                 if self.activate and np.size(self.occdata) != 0 and np.size(self.laser_range)!= 0:
                     self.integration()
         except Exception as e:
@@ -489,42 +473,9 @@ class MinimalSubscriber(Node):
             # stop moving
             self.stopbot()
 
-    def avoid(self, left):
-        if left:
-            self.rotatebot(-rotatechange)
-            # self.rotatebot(-avoid_angle)
-            print('avoiding left')
-        else:
-            self.rotatebot(rotatechange)
-            # self.rotatebot(avoid_angle)
-            print('avoiding right')
-        twist = Twist()
-        twist.linear.x = speedchange
-        self.publisher_.publish(twist)
-        time.sleep(0.1)
-        rclpy.spin_once(self)
-        self.path = self.astar()
 
-    def object_avoidance(self):
-        # print('in object avoidance')
-        v = None
-        w = None
-        for i in range(60):
-        # for i in range(45): # to account for funky lidar
-            if self.laser_range[i] < robot_r:
-                print('OBJECT: avoiding front left')
-                v = speed
-                w = -math.pi/4 
-                break
-        if v == None:
-            for i in range(300,360):
-            # for i in range(225, 270):
-                if self.laser_range[i] < robot_r:
-                    print('OBJECT: avoiding front right')
-                    v = speed
-                    w = math.pi/4
-                    break
-        return v,w
+
+
     def pick_furthestdistance(self):
         # self.get_logger().info('In pick_direction')
         if self.laser_range.size != 0:
@@ -616,77 +567,67 @@ class MinimalSubscriber(Node):
         self.publisher_.publish(twist)
 
     def integration(self):
-        if self.has_target:
-            desired_steering_angle= pick_direction(self.target[0], self.target[1], self.curr_x, self.curr_y, self.yaw)
-            self.rotatebot(desired_steering_angle)
+        try:
+            if self.has_target:
+                    desired_steering_angle= pick_direction(self.target[0], self.target[1], self.curr_x, self.curr_y, self.yaw)
+                    self.rotatebot(desired_steering_angle)
+                    
+                    # while self.occ_count[self.target[1]][self.target[0]] != 1:
+                    # while (abs(self.curr_x - self.target[0]) < target_error and abs(self.curr_y - self.target[1]) < target_error):
+                    while self.has_target and self.curr_x != self.target[0] and self.curr_y != self.target[1]:
+                        rclpy.spin_once(self)
+                        if self.laser_range.size != 0:
+                            lri = (self.laser_range[front_angles]<float(stop_distance)).nonzero()
+
+                            if len(lri[0]) >0:
+                                self.stopbot()
+                                self.rotatebot(180)
+
+                                laser_range = self.laser_range
+                                lri = (laser_range[front_angles]<float(stop_distance)).nonzero() #just update it in case 
+                                leftTurnMin = lri[0][0] - 40
+                                rightTurnMin = lri[0][-1] - 40
+                                self.get_logger().info('FINDING OPENING')
+                                rotangle = find_opening(laser_range)
+                                self.get_logger().info('Rotating bot')
+                                if rotangle == 0:
+                                    self.pick_furthestdistance()
+                                if rotangle < 0 and rotangle > leftTurnMin: # (dealing w -ve angles)
+                                    rotangle = leftTurnMin
+                                elif rotangle > 0 and rotangle < rightTurnMin:
+                                    rotangle = rightTurnMin
+
+                                self.rotatebot(rotangle)
+
+                                
+                            else:
+                                self.move_forward(0.1)
+                                pass
+
+                # if self.i == (len(self.path) - 1):
+                # print('target data: ' + str(self.occ_count[self.target[1]][self.target[0]])) 
             
-            # while self.occ_count[self.target[1]][self.target[0]] != 1:
-            # while (abs(self.curr_x - self.target[0]) < target_error and abs(self.curr_y - self.target[1]) < target_error):
-            avoided_before = False
-            while self.has_target and self.curr_x != self.target[0] and self.curr_y != self.target[1]:
-                rclpy.spin_once(self)
-                if self.laser_range.size != 0:
-                    lri = (self.laser_range[front_angles]<float(stop_distance)).nonzero()
+                    self.has_target = False
+                    self.stopbot()
+                
+                    
+            else:
+                self.get_logger().info('FINDING NEW TARGET')
+                self.exclude = set()
 
-                    if len(lri[0]) >0:
-                        self.stopbot()
-
-                        if avoided_before:
-                            self.has_target = False
-                            break
-
-                        laser_range = self.laser_range
-                        lri = (laser_range[front_angles]<float(stop_distance)).nonzero() #just update it in case 
-                        leftTurnMin = lri[0][0] - 40
-                        rightTurnMin = lri[0][-1] - 40
-                        self.get_logger().info('FINDING OPENING')
-                        rotangle = find_opening(laser_range)
-                        self.get_logger().info('Rotating bot')
-                        if rotangle == 0:
-                            self.pick_furthestdistance()
-                        if rotangle < 0 and rotangle > leftTurnMin: # (dealing w -ve angles)
-                            rotangle = leftTurnMin
-                        elif rotangle > 0 and rotangle < rightTurnMin:
-                            rotangle = rightTurnMin
-
-                        self.rotatebot(rotangle)
-
-                        avoided_before = True
-                        
-                    else:
-                        self.move_forward(0.1)
-                        pass
-
-            # if self.i == (len(self.path) - 1):
-            # print('target data: ' + str(self.occ_count[self.target[1]][self.target[0]])) 
-            
-            self.has_target = False
-            self.stopbot()
-        else:
-            self.get_logger().info('FINDING NEW TARGET')
-            self.exclude = set()
-
-            self.target = self.bfs()
-            # self.get_logger().info('Target %s' % self.target)
-            if not self.target:
-                print('exploration complete')
-                sys.exit
-            '''
-            # grid_target_x = round(((target[0] - map_origin.x) / map_res))
-            # grid_target_y = round(((target[1] - map_origin.y) / map_res))
-            # print('target value: ' + str(odata[grid_target_y][grid_target_x]))
-            # odata[grid_target_y][grid_target_x] = 0
-            # self.path = self.astar()
-            
-            while self.path_is_blocked():
-                self.stopbot()
-                self.exclude.add(self.target)
                 self.target = self.bfs()
-                self.path = self.astar()
-                rclpy.spin_once(self)
-            '''
-            # self.i = 0
-            self.has_target = True
+                # self.get_logger().info('Target %s' % self.target)
+                if not self.target:
+                    print('exploration complete')
+                    sys.exit
+                self.has_target = True
+        
+        except KeyboardInterrupt:
+            sys.exit()
+
+        except Exception as e:
+            print(e)
+            self.has_target = False
     
     def move_forward(self, seconds):
         twist = Twist()

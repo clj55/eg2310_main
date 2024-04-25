@@ -6,6 +6,8 @@ factor = 0.3
 lookahead_distance = 0.3
 
 TURTLEBOT_RADIUS = 0.25
+from Frontier import UNMAPPED_CELL, OPEN_CELL, WALL_CELL, FRONTIER_CELL
+CANNOT_CELL = (UNMAPPED_CELL, WALL_CELL)
 
 
 # tell robot to keep moving to next cell
@@ -316,6 +318,16 @@ def direct_opening(laserrange, preferred_angle): #V2
     # if rotangle 
     return rotangle
 
+# def find_opening_V4(matrix, preferred_angle, wall_dist, laserrange):
+#     #corner variable to store nearest corner to shortest path
+#     #use lidar data to find closest wall to the "corner"
+
+#     scale_angle()
+
+#     add_angle = math.degrees(math.atan(TURTLEBOT_RADIUS/wall_dist))
+
+
+
 
 def find_opening_V3(laserrange, preferred_angle): #V3
     #doesnt just find closest opening checks path then finds opening for that path
@@ -359,7 +371,7 @@ def find_opening_V3(laserrange, preferred_angle): #V3
             left_inner_dist = avg(laserrange[-i-5:-i])
             left_outer_dist = avg(laserrange[-i-10: -i-5]) 
             # print('Left wall dist: ', left_outer_dist- left_inner_dist)
-            if (left_outer_dist- left_inner_dist) > 0.2:
+            if (left_outer_dist - left_inner_dist) > 0.2:
                 left_angle = i 
                 LeftFound = True
                 Outer = True
@@ -429,8 +441,42 @@ def find_opening_V3(laserrange, preferred_angle): #V3
     # if rotangle 
     return rotangle
 
+def ableToTravel(map_odata, curr_x_grid, curr_y_grid, target_x_grid, target_y_grid, resolution):
+    margin_grid = (int)(0.1/resolution)
+    #print(margin_grid)
+    if (target_y_grid == curr_y_grid):
+        for x in range (curr_x_grid, target_x_grid, 1):
+            y = target_y_grid
+            if np.any(map_odata[math.floor(y)-margin_grid:math.ceil(y)+margin_grid+1, x]) == CANNOT_CELL:
+                return False    # meet a wall
+    elif (target_x_grid == curr_x_grid):
+        for y in range (curr_y_grid, target_y_grid, 1):
+            x = target_x_grid
+            if np.any(map_odata[math.floor(y)-margin_grid:math.ceil(y)+margin_grid+1, x]) == CANNOT_CELL:
+                return False    # meet a wall
+    else:
+        gradient = float(target_y_grid - curr_y_grid)/float(target_x_grid - curr_x_grid) 
+        x_init = curr_x_grid #for iteration
+        y_init = curr_y_grid
+        x_dest = target_x_grid
+        if curr_x_grid > target_x_grid:
+            x_init = target_x_grid
+            y_init = target_y_grid #WHY??
+            x_dest = curr_x_grid
+        for x in range (x_init + 1, x_dest, 1):
+            y = gradient * (x - x_init) + y_init
+            if map_odata[math.ceil(y), x] in CANNOT_CELL or map_odata[math.floor(y), x] in CANNOT_CELL:
+                return False    # meet a wall
+    return True
 
 
+def find_next_point_V2(current_x, current_y, path, map_odata, resolution):
+    for i in range(1, len(path)):
+        x = path[-i][0]
+        y = path[-i][1]
+        if ableToTravel(map_odata, current_x, current_y, x, y, resolution):
+            return x, y
+        
 
 
 def find_next_point(current_x, current_y, path): 

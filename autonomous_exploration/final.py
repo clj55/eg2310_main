@@ -1,21 +1,3 @@
-# Copyright 2016 Open Source Robotics Foundation, Inc.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-
-# NOTE
-# occ_data: 0 = black, 1 = unexplored,  
-# yaw starts from positive x direction, anti-clockwise is positive, clockwise is negative
 
 import rclpy
 from rclpy.node import Node
@@ -25,6 +7,7 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import OccupancyGrid
 from collections import deque
+from std_msgs.msg import String
 
 #for plotting
 import tf2_ros
@@ -40,16 +23,15 @@ import scipy.stats
 import heapq, math, random
 import sys
 
-from Move import pick_direction, find_opening_V3, find_next_point_V2
-from Frontier import find_frontier_cells, assign_groups, fGroups, findClosestGroup_V2, costmap
+from Move import pick_direction, find_opening
 # constants
 rotatechange = 0.5
-speedchange = 0.07
+speedchange = -0.08
 #occ_bins = [-1, 0, 100, 101]
 occ_bins = [-1, 0, 50, 100]
 map_bg_color = 1
-stop_distance = 0.30
-front_angle = 30
+stop_distance = 0.25
+front_angle = 20
 front_angles = range(-front_angle,front_angle+1,1)
 left_front_angles = range(0, front_angle + 1, 1)
 right_front_angles = range(-front_angle, 0, 1)
@@ -58,12 +40,9 @@ mapfile = 'map.txt'
 occfile = 'occ.txt'
 lookahead_distance = 0.24
 target_error = 0.15
-speed = 0.05
+speed = 0.06
 robot_r = 0.4
 avoid_angle = math.pi/3
-BLACK_CELL = 0
-expansion_size = 1
-
 
 def euler_from_quaternion(x, y, z, w):
     """
@@ -132,21 +111,28 @@ class MinimalSubscriber(Node):
         self.scan_subscription  # prevent unused variable warning
         self.laser_range = np.array([])
 
+        self.mode_subscription = self.create_subscription(
+            String,
+            'mode',
+            self.mode_callback,
+            10
+        )
+
         # self.i = 0
         self.has_target = False
         self.path = []
-        self.middles = []
+        self.activate = False
 
-    def grid_to_real(self, coordinates_x, coordinates_y ):
-        new_coordinates_x = coordinates_x*self.map_res + self.map_origin.x 
-        new_coordinates_y = coordinates_y*self.map_res + self.map_origin.y 
-        return new_coordinates_x, new_coordinates_y
+    def coords_to_real(self, coordinates):
+        new_coordinates_x = coordinates[0]*self.map_res + self.map_origin.x 
+        new_coordinates_y = coordinates[1]*self.map_res + self.map_origin.y 
+        return (new_coordinates_x, new_coordinates_y)
     
-    def real_to_grid(self, real_x, real_y):
-        grid_x = round((real_x - self.map_origin.x) / self.map_res)
-        grid_y = round((real_y - self.map_origin.y) / self.map_res)
-        return grid_x, grid_y
-
+    def mode_callback(self, msg):
+        self.get_logger().info('I heard: "%s"' % msg.data)
+        if msg.data == 'explore':
+            self.activate = True
+    
     def scan_callback(self, msg):
         # self.get_logger().info('In scan_callback')
         # create numpy array
@@ -170,8 +156,6 @@ class MinimalSubscriber(Node):
         # calculate total number of bins
         iwidth = msg.info.width
         iheight = msg.info.height
-        self.occ_height = iheight
-        self.occ_width = iwidth
         total_bins = iwidth * iheight
         # log the info
         # self.get_logger().info('Unmapped: %i Unoccupied: %i Occupied: %i Total: %i' % (occ_counts[0][0], occ_counts[0][1], occ_counts[0][2], total_bins))
@@ -198,16 +182,14 @@ class MinimalSubscriber(Node):
         map_res = msg.info.resolution
         # get map origin struct has fields of x, y, and z
         map_origin = msg.info.origin.position
-        
-        self.real_x = cur_pos.x
-        self.real_y = cur_pos.y
-        self.map_res = map_res
-        self.map_origin = map_origin
-
         # get map grid positions for x, y position
-        grid_x, grid_y = self.real_to_grid(cur_pos.x, cur_pos.y)
+        grid_x = round((cur_pos.x - map_origin.x) / map_res)
+        grid_y = round(((cur_pos.y - map_origin.y) / map_res))
         self.curr_x = grid_x
         self.curr_y = grid_y
+        self.cur_pos = cur_pos
+        self.map_res = map_res
+        self.map_origin = map_origin
 
         # self.get_logger().info('Grid Y: %i Grid X: %i' % (grid_y, grid_x))
 
@@ -223,22 +205,9 @@ class MinimalSubscriber(Node):
         # MAIN
 
         to_print = np.copy(odata)
-        if hasattr(self, 'path'):
-            for p in self.path:
-                x = p[0]
-                y = p[1]
-                to_print[y][x] = 0
-
         if hasattr(self, 'target'):
             p = self.target
-            x = round((p[0]- map_origin.x) / map_res)
-            y = round((p[1]- map_origin.y) / map_res)
-            to_print[y][x] = 0
-
-        if hasattr(self, 'nextpoint'):
-            p = self.nextpoint
             to_print[p[1]][p[0]] = 0
-
 
         # odata[0][0] = 3
         # self.get_logger().info('origin: %i, %i' % (round(map_origin.x),round(map_origin.y)))
@@ -334,12 +303,12 @@ class MinimalSubscriber(Node):
         return None
 
 
-
     def mover(self):
         try:
             while rclpy.ok():
                 rclpy.spin_once(self)
-                if np.size(self.occdata) != 0 and np.size(self.laser_range)!= 0:
+# 
+                if self.activate and np.size(self.occdata) != 0 and np.size(self.laser_range)!= 0:
                     self.integration()
         except Exception as e:
             print(e)
@@ -349,7 +318,9 @@ class MinimalSubscriber(Node):
             # stop moving
             self.stopbot()
 
-    
+
+
+
     def pick_furthestdistance(self):
         # self.get_logger().info('In pick_direction')
         if self.laser_range.size != 0:
@@ -370,7 +341,7 @@ class MinimalSubscriber(Node):
         twist.angular.z = 0.0
         # not sure if this is really necessary, but things seem to work more
         # reliably with this
-        time.sleep(1)
+        # time.sleep(1)
         self.publisher_.publish(twist)
 
     def stopbot(self):
@@ -415,6 +386,7 @@ class MinimalSubscriber(Node):
         # self.get_logger().info('c_change_dir: %f c_dir_diff: %f' % (c_change_dir, c_dir_diff))
         # if the rotation direction was 1.0, then we will want to stop when the c_dir_diff
         # becomes -1.0, and vice versa
+        
         while(c_change_dir * c_dir_diff > 0):
             # allow the callback functions to run
             rclpy.spin_once(self)
@@ -429,93 +401,78 @@ class MinimalSubscriber(Node):
             # self.get_logger().info('c_change_dir: %f c_dir_diff: %f' % (c_change_dir, c_dir_diff))
 
         self.get_logger().info('End Yaw: %f' % math.degrees(current_yaw))
+
+        # lri = (self.laser_range[front_angles]<float(stop_distance)).nonzero()
+        # while len(lri[0]) > 0:
+        #     lri = (self.laser_range[front_angles]<float(stop_distance)).nonzero()
+        #     print(lri[0])
         # set the rotation speed to 0
         twist.angular.z = 0.0
         # stop the rotation
         self.publisher_.publish(twist)
 
     def integration(self):
-        # while self.has_target and self.curr_x != self.target[0] and self.curr_y != self.target[1]:
-        rclpy.spin_once(self)
-        if self.laser_range.size != 0:
-            lri = (self.laser_range[front_angles]<float(stop_distance)).nonzero()
+        try:
+            if self.has_target:
+                    desired_steering_angle= pick_direction(self.target[0], self.target[1], self.curr_x, self.curr_y, self.yaw)
+                    self.rotatebot(desired_steering_angle)
+                    
+                    # while self.occ_count[self.target[1]][self.target[0]] != 1:
+                    # while (abs(self.curr_x - self.target[0]) < target_error and abs(self.curr_y - self.target[1]) < target_error):
+                    while self.has_target and self.curr_x != self.target[0] and self.curr_y != self.target[1]:
+                        rclpy.spin_once(self)
+                        if self.laser_range.size != 0:
+                            lri = (self.laser_range[front_angles]<float(stop_distance)).nonzero()
 
-            if self.has_target == False or len(lri[0]) >0: #obstacle detected
-                print(self.has_target)
-                self.get_logger().info('No target or OBSTACLE DETECTED')   
-                self.stopbot()
-                laser_range = self.laser_range
-                lri = (laser_range[front_angles]<float(stop_distance)).nonzero() #just update it in case 
+                            if len(lri[0]) >0:
+                                self.stopbot()
+                                self.rotatebot(180)
 
-                if len(lri[0]) >0: #if actl no obstacle
-                    leftTurnMin = lri[0][0] - 40
-                    rightTurnMin = lri[0][-1] - 40
-                else:
-                    leftTurnMin = -360
-                    rightTurnMin = 0
+                                laser_range = self.laser_range
+                                lri = (laser_range[front_angles]<float(stop_distance)).nonzero() #just update it in case 
+                                leftTurnMin = lri[0][0] - 40
+                                rightTurnMin = lri[0][-1] - 40
+                                self.get_logger().info('FINDING OPENING')
+                                rotangle = find_opening(laser_range)
+                                self.get_logger().info('Rotating bot')
+                                if rotangle == 0:
+                                    self.pick_furthestdistance()
+                                if rotangle < 0 and rotangle > leftTurnMin: # (dealing w -ve angles)
+                                    rotangle = leftTurnMin
+                                elif rotangle > 0 and rotangle < rightTurnMin:
+                                    rotangle = rightTurnMin
 
-                self.find_target()
-                path_angle = math.degrees(pick_direction(self.nextpoint[0], self.nextpoint[1], self.curr_x, self.curr_y, self.yaw))
-                print(path_angle)
+                                self.rotatebot(rotangle)
 
-                self.get_logger().info('FINDING OPENING')
-                rotangle = find_opening_V3(laser_range, path_angle)
-                self.get_logger().info('Rotating bot')
-                print("rotangle:", rotangle)
-                time.sleep(5)
+                                
+                            else:
+                                self.move_forward(0.1)
+                                pass
 
-                # #Make sure robot is turning enuf so that it doesnt redetect the same angle in it 
-                # if rotangle == 0: #not sure if this will affect it just going forward at the start 
-                #     self.pick_furthestdistance()
-                # if rotangle < 0 and rotangle > leftTurnMin: # (dealing w -ve angles)
-                #     rotangle = leftTurnMin
-                #     self.rotatebot(rotangle)
-                # elif rotangle > 0 and rotangle < rightTurnMin:
-                #     rotangle = rightTurnMin
-                #     self.rotatebot(rotangle)
-
+                # if self.i == (len(self.path) - 1):
+                # print('target data: ' + str(self.occ_count[self.target[1]][self.target[0]])) 
+            
+                    self.has_target = False
+                    self.stopbot()
                 
-
+                    
             else:
-                self.move_forward(0.1)
+                self.get_logger().info('FINDING NEW TARGET')
+                self.exclude = set()
 
-            # if self.i == (len(self.path) - 1):
-            # print('target data: ' + str(self.occ_count[self.target[1]][self.target[0]])) 
-                 
-
-    def find_target(self):
-        self.get_logger().info('FINDING NEW TARGET')
-        self.exclude = set()
-        matrix = np.copy(self.occ_count)
-        map_res = self.map_res
-        # matrix = costmap(self.occ_count, self.occ_width, self.occ_height, self.map_res, expansion_size) #not sure if should costmap here or after find frontier cells
-        np.savetxt('matrix.csv', matrix, delimiter = ',')
-        self.get_logger().info('Find frontier cells')
-        data = find_frontier_cells(matrix) #Find Frontiers
-        np.savetxt('frontier.csv', data, delimiter = ',')
-
-        # COORDINATES ARE IN ROW COLUMN FORMAT 
-        self.get_logger().info('Assign groups')
-        groups = assign_groups(data) #Group Frontiers 
-        self.get_logger().info('Sort groups')
-        groups = fGroups(groups) #Sort the groups from smallest to largest. Get the 5 biggest groups
-        # print(groups)
-        if len(groups) == 0:
-            print('No groups found exploration complete')
-            sys.exit
+                self.target = self.bfs()
+                # self.get_logger().info('Target %s' % self.target)
+                if not self.target:
+                    print('exploration complete')
+                    sys.exit
+                self.has_target = True
         
-        else:
-            #ALL IN ROW COLUMN FORMAT 
-            grid_pos = (self.curr_y, self.curr_x)  # ROW, COLUMN
-            self.path = findClosestGroup_V2(matrix, groups, grid_pos) #shd be x, y on grid from here
-            print("path:", self.path)
-            print("found closest group")
-            self.target = self.path[-1]
-            print(self.target)
-            self.nextpoint = find_next_point_V2(self.curr_x, self.curr_y, self.path, matrix, map_res)
-            print("Next point:", self.nextpoint)
-        
-        self.has_target = True
+        except KeyboardInterrupt:
+            sys.exit()
+
+        except Exception as e:
+            print(e)
+            self.has_target = False
     
     def move_forward(self, seconds):
         twist = Twist()
@@ -525,19 +482,6 @@ class MinimalSubscriber(Node):
         twist.angular.z = w
         self.publisher_.publish(twist)
         time.sleep(seconds)
-
-    def path_is_blocked(self):
-        directions = [(0, 1), (0, -1), (1, 0), (-1, 0)]
-        for p in self.path:
-            for dx, dy in directions:
-                check_x, check_y = p[0] + dx, p[1] + dy
-                if 0 <= check_x < len(self.occ_count) and 0 <= check_x < len(self.occ_count[0]):
-                    if self.occ_count[check_y][check_x] == 3:
-                        self.path = self.astar()
-                        print('path blocked at ' + str(check_x) + ' ' + str(check_y))
-                        return True
-        return False
-
             
 
 def main(args=None):

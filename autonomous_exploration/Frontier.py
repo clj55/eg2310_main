@@ -159,7 +159,6 @@ def findClosestGroup(matrix,groups, current,resolution,originX,originY):
     paths = []
     score = []
     max_score = -1 #max score index
-    middles = []
     for i in range(len(groups)):
         middle = calculate_centroid([p[0] for p in groups[i][1]],[p[1] for p in groups[i][1]]) 
         path = astar(matrix, current, middle)
@@ -181,17 +180,16 @@ def findClosestGroup(matrix,groups, current,resolution,originX,originY):
     
     if max_score != -1:
         targetP = paths[max_score]
-    # else: #If the groups are closer than target_error*2 distance, it selects a random point as the target. This allows the robot to escape some situations
-    #     index = random.randint(0,len(groups)-1)
-    #     target = groups[index][1]
-    #     target = target[random.randint(0,len(target)-1)]
-    #     path = astar(matrix, current, target)
-    #     targetP = [(p[1]*resolution+originX,p[0]*resolution+originY) for p in path]
+    else: #If the groups are closer than target_error*2 distance, it selects a random point as the target. This allows the robot to escape some situations
+        index = random.randint(0,len(groups)-1)
+        target = groups[index][1]
+        target = target[random.randint(0,len(target)-1)]
+        path = astar(matrix, current, target)
+        targetP = [(p[1]*resolution+originX,p[0]*resolution+originY) for p in path]
     return targetP
 
 def fGroups(groups):
     print("FGROUPS")
-    print(groups)
     sorted_groups = sorted(groups.items(), key=lambda x: len(x[1]), reverse=True)
     top_five_groups = [g for g in sorted_groups[:5] if len(g[1]) > 0]    
     return top_five_groups
@@ -300,7 +298,7 @@ def findClosesttoGoal(cmap, groups, target_x, target_y, curr_x, curr_y, resoluti
         return None
     return centroids[min_index][0], centroids[min_index][1]
 
-def ableToTravel(map_odata, curr_x_grid, curr_y_grid, target_x_grid, target_y_grid, resolution):
+def ableToTravel(map_odata, curr_x_grid, curr_y_grid, target_x_grid, target_y_grid, resolution): #NOT USINGS
     margin_grid = (int)(0.1/resolution)
     #print(margin_grid)
     if (target_y_grid == curr_y_grid):
@@ -329,6 +327,46 @@ def ableToTravel(map_odata, curr_x_grid, curr_y_grid, target_x_grid, target_y_gr
     return True
 
 
+
+def findClosestGroup_V2(matrix,groups, current): #cells instead of position
+    print("FINDCLOSESTGROUP")
+    targetP = None
+    distances = []
+    paths = []
+    score = []
+    max_score = -1 #max score index
+    for i in range(len(groups)):
+        middle = calculate_centroid([p[0] for p in groups[i][1]],[p[1] for p in groups[i][1]]) 
+        print("centroid calc")
+        path = astar(matrix, current, middle)
+        print("astar")
+        path = [(p[1],p[0]) for p in path]
+        total_distance = pathLength(path)
+        print("pathlength")
+        distances.append(total_distance)
+        paths.append(path)
+
+    for i in range(len(distances)):
+        if distances[i] == 0:
+            score.append(0)
+        else:
+            score.append(len(groups[i][1])/distances[i])
+   
+    for i in range(len(distances)):
+        if distances[i] > target_error*3:
+            if max_score == -1 or score[i] > score[max_score]:
+                max_score = i
+    
+    if max_score != -1:
+        targetP = paths[max_score]
+    else: #If the groups are closer than target_error*2 distance, it selects a random point as the target. This allows the robot to escape some situations
+        index = random.randint(0,len(groups)-1)
+        target = groups[index][1]
+        target = target[random.randint(0,len(target)-1)]
+        path = astar(matrix, current, target)
+        targetP = [(p[1],p[0]) for p in path]
+
+    return targetP
 
 
     

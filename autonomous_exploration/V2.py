@@ -44,7 +44,7 @@ from Move import pick_direction, direct_opening, find_next_point
 from Frontier import find_frontier_cells, assign_groups, fGroups, findClosestGroup, costmap
 # constants
 rotatechange = 0.5
-speedchange = 0.07
+speedchange = -0.07
 #occ_bins = [-1, 0, 100, 101]
 occ_bins = [-1, 0, 50, 100]
 map_bg_color = 1
