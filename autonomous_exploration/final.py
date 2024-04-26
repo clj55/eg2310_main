@@ -272,9 +272,6 @@ class MinimalSubscriber(Node):
         x = self.curr_x
         y = self.curr_y
         exclude = self.exclude
-    #def bfs(matrix, x, y):
-        # print('currently in bfs')
-        # np.savetxt('matrix.txt', matrix)
         directions = [(0, 1), (0, -1), (1, 0), (-1, 0)]
         queue = deque([(x, y, 0)])  # (x, y, distance)
         visited = set()
@@ -414,7 +411,7 @@ class MinimalSubscriber(Node):
     def integration(self):
         try:
             if self.has_target:
-                    desired_steering_angle= pick_direction(self.target[0], self.target[1], self.curr_x, self.curr_y, self.yaw)
+                    desired_steering_angle = pick_direction(self.target[0], self.target[1], self.curr_x, self.curr_y, self.yaw)
                     self.rotatebot(desired_steering_angle)
                     
                     # while self.occ_count[self.target[1]][self.target[0]] != 1:

@@ -199,10 +199,7 @@ def find_opening(laserrange): #FIXED V1 SHOULD COOK
             wall_dist = right_outer_dist
 
     else:
-        print("knn find opening also cannot")
         print("opening straight ahead?")
-        # laser_angle = 0
-        # wall_dist = laserrange[0]
         return 0
     
     actl_angle = scale_angle(laser_angle, len(laserrange))

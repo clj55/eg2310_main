@@ -27,22 +27,14 @@ from Move import pick_direction, find_opening
 # constants
 rotatechange = 0.5
 speedchange = -0.08
-#occ_bins = [-1, 0, 100, 101]
 occ_bins = [-1, 0, 50, 100]
 map_bg_color = 1
 stop_distance = 0.25
 front_angle = 20
 front_angles = range(-front_angle,front_angle+1,1)
-left_front_angles = range(0, front_angle + 1, 1)
-right_front_angles = range(-front_angle, 0, 1)
 scanfile = 'lidar.txt'
 mapfile = 'map.txt'
 occfile = 'occ.txt'
-lookahead_distance = 0.24
-target_error = 0.15
-speed = 0.06
-robot_r = 0.4
-avoid_angle = math.pi/3
 
 def euler_from_quaternion(x, y, z, w):
     """
@@ -382,13 +374,11 @@ class MinimalSubscriber(Node):
         self.publisher_.publish(twist)
 
     def integration(self):
-        try:
+        # try:
             if self.has_target:
                     desired_steering_angle= pick_direction(self.target[0], self.target[1], self.curr_x, self.curr_y, self.yaw)
                     self.rotatebot(desired_steering_angle)
                     
-                    # while self.occ_count[self.target[1]][self.target[0]] != 1:
-                    # while (abs(self.curr_x - self.target[0]) < target_error and abs(self.curr_y - self.target[1]) < target_error):
                     while self.has_target and self.curr_x != self.target[0] and self.curr_y != self.target[1]:
                         rclpy.spin_once(self)
                         if self.laser_range.size != 0:
@@ -396,7 +386,7 @@ class MinimalSubscriber(Node):
 
                             if len(lri[0]) >0:
                                 self.stopbot()
-                                self.rotatebot(180)
+                            
 
                                 laser_range = self.laser_range
                                 lri = (laser_range[front_angles]<float(stop_distance)).nonzero() #just update it in case 
@@ -434,12 +424,12 @@ class MinimalSubscriber(Node):
                     sys.exit
                 self.has_target = True
         
-        except KeyboardInterrupt:
-            sys.exit()
+        # except KeyboardInterrupt:
+        #     sys.exit()
 
-        except Exception as e:
-            print(e)
-            self.has_target = False
+        # except Exception as e:
+        #     print(e)
+        #     self.has_target = False
     
     def move_forward(self, seconds):
         twist = Twist()
