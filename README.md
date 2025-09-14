@@ -11,4 +11,4 @@ Operational Flow:
 
 Main Control: finalcontrol.py
 
-Autonomous Exploration: clean.py
+Autonomous Exploration: autonomous_exploration/clean.py
